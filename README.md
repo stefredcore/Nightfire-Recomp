@@ -4,8 +4,6 @@ A native Windows port of **007: Nightfire** for the original Xbox, made by stati
 recompilation with [xboxrecomp](https://github.com/sp00nznet/xboxrecomp). The game code is
 translated to C and built on your own PC from your own disc. This is not an emulator.
 
-Both parts of the game run: the on-foot missions and the driving missions.
-
 **No game files are included.** You need your own copy of the game.
 
 <h2>What you need</h2>
