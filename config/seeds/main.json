@@ -1,0 +1,63 @@
+[
+ {
+  "start": "0x00157334",
+  "note": "D3D function start the disassembler missed (first bring-up, Oct 2026)."
+ },
+ {
+  "start": "0x00106220",
+  "note": "D3D function start the disassembler missed (first bring-up, Oct 2026)."
+ },
+ {
+  "start": "0x001082DD",
+  "note": "D3D function start the disassembler missed (first bring-up, Oct 2026)."
+ },
+ {
+  "start": "0x00107FCB",
+  "note": "D3D function start the disassembler missed (first bring-up, Oct 2026)."
+ },
+ {
+  "start": "0x00107D53",
+  "note": "D3D function start the disassembler missed (first bring-up, Oct 2026)."
+ },
+ {
+  "start": "0x00107DB6",
+  "note": "D3D function start the disassembler missed (first bring-up, Oct 2026)."
+ },
+ {
+  "start": "0x0010809A",
+  "note": "D3D function start the disassembler missed (first bring-up, Oct 2026)."
+ },
+ {
+  "start": "0x00105560",
+  "note": "D3D function start the disassembler missed (first bring-up, Oct 2026)."
+ },
+ {
+  "start": "0x00105280",
+  "note": "D3D function start the disassembler missed (first bring-up, Oct 2026)."
+ },
+ {
+  "start": "0x00105360",
+  "note": "D3D function start the disassembler missed (first bring-up, Oct 2026)."
+ },
+ {
+  "start": "0x0010AD73",
+  "note": "D3D function start the disassembler missed (first bring-up, Oct 2026)."
+ },
+ {
+  "start": "0x00103AD0",
+  "note": "D3D function start the disassembler missed (first bring-up, Oct 2026)."
+ },
+ {
+  "start": "0x00103B20",
+  "note": "D3D function start the disassembler missed (first bring-up, Oct 2026)."
+ },
+ {
+  "start": "0x000324D0",
+  "observed": true,
+  "note": "Indirect-call target observed at runtime after 07350048.xmv opens."
+ },
+ {
+  "start": "0x000603E0",
+  "note": "Virtual method only reachable through the vtable slot at 0x00177FB4; starts right after nop padding, ~4 KB message handler."
+ }
+]

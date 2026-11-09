@@ -1,0 +1,59 @@
+# Game files (your own disc) stay local.
+/game/
+*.xbe
+*.iso
+*.xiso
+*.viv
+*.xmv
+*.mad
+
+# Output of scripts/recompile.ps1 and the build. The lifted C is translated
+# game code and must not be committed.
+/src/recomp/
+/build/
+/build-*/
+/out/
+/Nightfire Launcher.exe
+/Nightfire Launcher.exe.old
+/install-info.txt
+/mkb.default.ini
+# A player's install: Zig, Python, CMake, Ninja and their licences (installer\)
+/toolchain/
+
+# installer/build.ps1: the payload, the build, the result
+/installer/obj/
+/installer/cache/
+/installer/build/
+/installer/dist/
+
+# Runtime output when run from the tree
+/logs/
+*.log
+*.txt
+!CMakeLists.txt
+!README.txt
+!LICENSE*.txt
+*RECOMP_STDERR*
+*.bmp
+*.png
+!/assets/*.png
+*.wav
+*.d3dcap
+t:/
+u:/
+z:/
+
+# Leftovers of the bring-up, kept locally
+/observed_icall_seed.json
+/d3d_seed_functions.tmp.json
+
+# IDE / tools
+.vs/
+.vscode/
+.idea/
+.claude/settings.local.json
+*.swp
+*~
+Thumbs.db
+.DS_Store
+shader_cache/

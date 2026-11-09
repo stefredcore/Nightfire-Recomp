@@ -1,0 +1,4 @@
+// The programs' icon (resource 1), for Zig builds: zig cc compiles a .rc
+// handed to the link, and finds the icon beside it. Visual Studio builds
+// use the copy CMakeLists.txt writes with the icon's full path.
+1 ICON "nightfire.ico"

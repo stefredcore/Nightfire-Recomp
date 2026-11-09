@@ -1,0 +1,9 @@
+// The installer's payload (installer/build.ps1 makes the files). The numbers
+// are IDR_PROJECT, IDR_TOOLKIT, IDR_MANIFEST and IDR_TOOLCHAIN in
+// nightfire_setup.c.
+101 RCDATA "@PAYLOAD_DIR@/project.zip"
+102 RCDATA "@PAYLOAD_DIR@/toolkit.zip"
+103 RCDATA "@PAYLOAD_DIR@/manifest.txt"
+104 RCDATA "@PAYLOAD_DIR@/toolchain.zip"
+// The program's icon in Explorer, the game's (assets/nightfire.ico).
+1 ICON "@NF_ICON@"

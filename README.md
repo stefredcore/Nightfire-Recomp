@@ -11,7 +11,7 @@ Both parts of the game run: the on-foot missions and the driving missions.
 <h2>What you need</h2>
 
 - Windows 10 or 11, 64-bit, and a DirectX 11 graphics card
-- An extracted Xbox disc of 007: Nightfire, European (PAL) or North-American (NTSC).
+- An extracted Xbox disc of 007: Nightfire, European (PAL) or North American (NTSC).
   [extract-xiso](https://github.com/xboxdev/extract-xiso) can extract it.
 - About 5 GB of free disk space
 
@@ -32,18 +32,19 @@ The launcher has two modes:
 - **Original**: the game as on the console, with a controller only.
 - **Enhanced**: adds mouse and keyboard, higher resolution, widescreen and other options.
 
+Your savegames are in `Documents\My Games\Nightfire Recomp`. Delete that folder to start the
+game from the beginning.
+
 <h2>Build from source</h2>
 
 For developers. You need Visual Studio 2022 or newer with the C++ workload and CMake, and
 Python 3.10+ with `py -3 -m pip install capstone pefile`.
 
-```powershell
-git clone --recursive https://github.com/stefredcore/Nightfire-Recomp.git
-cd Nightfire-Recomp
-# copy your extracted disc into a folder named "game" (game\default.xbe must exist)
-powershell -ExecutionPolicy Bypass -File scripts\recompile.ps1
-powershell -ExecutionPolicy Bypass -File scripts\build.ps1
-```
+1. Clone the repository with its submodule:
+   `git clone --recursive https://github.com/stefredcore/Nightfire-Recomp.git`
+2. Copy your extracted disc into a folder named `game` inside it (`game\default.xbe` must
+   exist).
+3. Double-click `build.bat` and wait until it says "Done".
 
 The game is then in `build\Release`. Start it with `Nightfire Launcher.exe` in the project
 folder.
@@ -54,4 +55,4 @@ This is an unofficial fan project. It is not affiliated with any publisher or st
 repository does not contain any game files.
 
 The project's own code is under the [MIT License](LICENSE). The toolkit in
-`external/xboxrecomp` has its own licences.
+`external/xboxrecomp` has its own licenses.

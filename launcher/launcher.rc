@@ -1,0 +1,5 @@
+// The application manifest (RT_MANIFEST, id 1), for builds where the
+// #pragma comment(linker, "/manifestdependency:...") in nightfire_launcher.c
+// does nothing: Zig's Clang. Without it Windows hands out the old common
+// controls, which have no command links, and the main buttons are missing.
+1 24 "launcher.manifest"
