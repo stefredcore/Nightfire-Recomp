@@ -50,9 +50,8 @@ folder.
 
 <h2>Legal</h2>
 
-This is an unofficial fan project. It is not affiliated with or endorsed by Electronic Arts,
-Eurocom, MGM, Danjaq or Microsoft. James Bond, 007 and Nightfire are trademarks of their
-owners.
+This is an unofficial fan project. It is not affiliated with any publisher or studio. This
+repository does not contain any game files.
 
 The project's own code is under the [MIT License](LICENSE). The toolkit in
 `external/xboxrecomp` has its own licences.
