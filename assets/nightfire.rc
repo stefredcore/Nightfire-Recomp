@@ -1,4 +1,34 @@
-// The programs' icon (resource 1), for Zig builds: zig cc compiles a .rc
-// handed to the link, and finds the icon beside it. Visual Studio builds
-// use the copy CMakeLists.txt writes with the icon's full path.
+// The programs' icon and version information (nightfire.exe,
+// nightfire_driving.exe, the launcher). zig cc compiles this .rc handed to
+// the link and finds the icon beside it; for Visual Studio CMakeLists.txt
+// writes a copy with the icon's full path. Numbers instead of winver.h's
+// names, so it needs no include.
 1 ICON "nightfire.ico"
+
+1 VERSIONINFO
+FILEVERSION 1,0,0,0
+PRODUCTVERSION 1,0,0,0
+FILEFLAGSMASK 0x3F
+FILEFLAGS 0x0
+FILEOS 0x40004
+FILETYPE 0x1
+FILESUBTYPE 0x0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "stefredcore"
+            VALUE "FileDescription", "Nightfire Recomp"
+            VALUE "FileVersion", "1.0.0"
+            VALUE "LegalCopyright", "Copyright (c) 2026 stefredcore, MIT License"
+            VALUE "ProductName", "Nightfire Recomp"
+            VALUE "ProductVersion", "1.0.0"
+            VALUE "Comments", "https://github.com/stefredcore/Nightfire-Recomp"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

@@ -19,7 +19,7 @@
     catches a forgotten switch, not every way code can go wrong.
 
     build.ps1 runs it before compiling. On its own:
-        powershell -ExecutionPolicy Bypass -File scripts\check_original.ps1
+        powershell -ExecutionPolicy RemoteSigned -File scripts\check_original.ps1
 #>
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot

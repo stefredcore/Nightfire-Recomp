@@ -86,7 +86,7 @@ if ($Target -eq 'all') {
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $procs = foreach ($n in @('main', 'driving')) {
         $p = Start-Process powershell -NoNewWindow -PassThru -ArgumentList @(
-            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"",
+            '-NoProfile', '-ExecutionPolicy', 'RemoteSigned', '-File', "`"$PSCommandPath`"",
             '-Target', $n, '-From', $From)
         $null = $p.Handle   # without this, ExitCode reads back empty in PS 5.1
         @{ Name = $n; Proc = $p }
@@ -100,7 +100,7 @@ if ($Target -eq 'all') {
         New-Item -ItemType Directory -Force (Split-Path $prepLog) | Out-Null
         $prep = Start-Process powershell -NoNewWindow -PassThru `
             -RedirectStandardOutput $prepLog -RedirectStandardError "$prepLog.err" -ArgumentList @(
-            '-NoProfile', '-ExecutionPolicy', 'Bypass',
+            '-NoProfile', '-ExecutionPolicy', 'RemoteSigned',
             '-File', "`"$(Join-Path $PSScriptRoot 'build.ps1')`"", '-Prepare')
         $null = $prep.Handle
         Write-Host '  compiling the toolkit and the launcher alongside (build/prepare.log)'

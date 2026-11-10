@@ -7,3 +7,35 @@
 104 RCDATA "@PAYLOAD_DIR@/toolchain.zip"
 // The program's icon in Explorer, the game's (assets/nightfire.ico).
 1 ICON "@NF_ICON@"
+
+// Version information, as real installers carry it: without any, virus
+// scanners' heuristics count the file as more suspicious.
+1 VERSIONINFO
+FILEVERSION 1,0,0,0
+PRODUCTVERSION 1,0,0,0
+FILEFLAGSMASK 0x3F
+FILEFLAGS 0x0
+FILEOS 0x40004
+FILETYPE 0x1
+FILESUBTYPE 0x0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "stefredcore"
+            VALUE "FileDescription", "Nightfire Recomp Setup"
+            VALUE "FileVersion", "1.0.0"
+            VALUE "InternalName", "Nightfire-Setup"
+            VALUE "LegalCopyright", "Copyright (c) 2026 stefredcore, MIT License"
+            VALUE "OriginalFilename", "Nightfire-Setup.exe"
+            VALUE "ProductName", "Nightfire Recomp"
+            VALUE "ProductVersion", "1.0.0"
+            VALUE "Comments", "https://github.com/stefredcore/Nightfire-Recomp"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

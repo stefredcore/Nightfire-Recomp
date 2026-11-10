@@ -474,7 +474,7 @@ static long update_job(void)
         return -1;
 
     step(20, "Translating the game code (15 to 30 minutes the first time) ...");
-    if (run(L"powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\recompile.ps1", 1, NULL, 0))
+    if (run(L"powershell -NoProfile -ExecutionPolicy RemoteSigned -File scripts\\recompile.ps1", 1, NULL, 0))
         return -1;
 
     step(60, "Building the game ...");
@@ -482,7 +482,7 @@ static long update_job(void)
     swprintf(old, MAX_PATH, L"%s.old", self);
     DeleteFileW(old);
     MoveFileW(self, old);
-    r = run(L"powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\build.ps1", 1, NULL, 0);
+    r = run(L"powershell -NoProfile -ExecutionPolicy RemoteSigned -File scripts\\build.ps1", 1, NULL, 0);
     if (!exists(self))
         MoveFileW(old, self);
     if (r)

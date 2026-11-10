@@ -43,7 +43,7 @@ if ($Prepare) {
     }
 
     # No enhancement may run in the original mode (scripts/check_original.ps1).
-    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'check_original.ps1')
+    & powershell -NoProfile -ExecutionPolicy RemoteSigned -File (Join-Path $PSScriptRoot 'check_original.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'Original mode check failed (see above).' }
 }
 

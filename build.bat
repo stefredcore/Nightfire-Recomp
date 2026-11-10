@@ -21,11 +21,11 @@ if not errorlevel 1 if exist .git (
 )
 
 echo [1/2] Recompiling the game code (takes 15-30 minutes)...
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\recompile.ps1
+powershell -NoProfile -ExecutionPolicy RemoteSigned -File scripts\recompile.ps1
 if errorlevel 1 goto :failed
 
 echo [2/2] Building...
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1
+powershell -NoProfile -ExecutionPolicy RemoteSigned -File scripts\build.ps1
 if errorlevel 1 goto :failed
 
 echo.

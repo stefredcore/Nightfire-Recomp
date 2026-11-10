@@ -53,7 +53,13 @@ endif()
 # (FileSystemFailure); it takes assets/nightfire.rc, which finds the icon
 # beside it, as it does launcher/launcher.rc.
 file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/assets/nightfire.ico" NF_ICON)
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/nightfire_icon.rc" "1 ICON \"${NF_ICON}\"\n")
+# The same resources as assets/nightfire.rc (icon and version information),
+# with the icon's full path.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/assets/nightfire.rc" NF_RC)
+string(REPLACE "\"nightfire.ico\"" "\"${NF_ICON}\"" NF_RC "${NF_RC}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/nightfire_icon.rc" "${NF_RC}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/nightfire.rc")
 function(nightfire_add_icon name)
     if(MSVC)
         target_sources(${name} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/nightfire_icon.rc")

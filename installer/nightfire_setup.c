@@ -37,6 +37,12 @@
 #include <wchar.h>
 #include <math.h>
 
+/* Windows 10's job list for CreateProcess (run), for SDKs that only declare
+ * it with _WIN32_WINNT at 0x0A00. */
+#ifndef PROC_THREAD_ATTRIBUTE_JOB_LIST
+#define PROC_THREAD_ATTRIBUTE_JOB_LIST ProcThreadAttributeValue(13, FALSE, TRUE, FALSE)
+#endif
+
 #pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' " \
                         "version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
@@ -227,7 +233,7 @@ static int run(const wchar_t *cmd, const wchar_t *cwd, LineFn fn, char *out, siz
 {
     SECURITY_ATTRIBUTES sa = { sizeof sa, NULL, TRUE };
     STARTUPINFOW si;
-    PROCESS_INFORMATION pi;
+    PROCESS_INFORMATION pi = { 0 };
     HANDLE rd, wr, nul;
     wchar_t *buf;
     char chunk[4096], line[1024];
@@ -247,18 +253,51 @@ static int run(const wchar_t *cmd, const wchar_t *cwd, LineFn fn, char *out, siz
     si.hStdOutput = wr;
     si.hStdError = wr;
     buf = _wcsdup(cmd);
-    if (!buf || !CreateProcessW(NULL, buf, NULL, NULL, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED,
-                                NULL, cwd, &si, &pi)) {
-        free(buf);
-        CloseHandle(rd);
-        CloseHandle(wr);
-        if (nul != INVALID_HANDLE_VALUE)
-            CloseHandle(nul);
-        return -1;
+    /* The child starts inside the job (Cancel ends it and all it started)
+     * through the attribute list, not suspended and resumed after
+     * AssignProcessToJobObject: a process created suspended is what code
+     * injection looks like, and virus scanners count it against us. Without
+     * the attribute (before Windows 10) it is assigned right after start,
+     * before PowerShell has started anything of its own. */
+    {
+        STARTUPINFOEXW sx;
+        SIZE_T need = 0;
+        LPPROC_THREAD_ATTRIBUTE_LIST al = NULL;
+        BOOL ok, in_job;
+
+        memset(&sx, 0, sizeof sx);
+        sx.StartupInfo = si;
+        sx.StartupInfo.cb = sizeof sx;
+        if (s_job) {
+            InitializeProcThreadAttributeList(NULL, 1, 0, &need);
+            al = need ? (LPPROC_THREAD_ATTRIBUTE_LIST)malloc(need) : NULL;
+            if (al && (!InitializeProcThreadAttributeList(al, 1, 0, &need)
+                       || !UpdateProcThreadAttribute(al, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST,
+                                                     &s_job, sizeof s_job, NULL, NULL))) {
+                free(al);
+                al = NULL;
+            }
+        }
+        sx.lpAttributeList = al;
+        in_job = al != NULL;
+        ok = buf && CreateProcessW(NULL, buf, NULL, NULL, TRUE,
+                                   CREATE_NO_WINDOW | (in_job ? EXTENDED_STARTUPINFO_PRESENT : 0),
+                                   NULL, cwd, in_job ? &sx.StartupInfo : &si, &pi);
+        if (al) {
+            DeleteProcThreadAttributeList(al);
+            free(al);
+        }
+        if (!ok) {
+            free(buf);
+            CloseHandle(rd);
+            CloseHandle(wr);
+            if (nul != INVALID_HANDLE_VALUE)
+                CloseHandle(nul);
+            return -1;
+        }
+        if (s_job && !in_job)
+            AssignProcessToJobObject(s_job, pi.hProcess);
     }
-    if (s_job)
-        AssignProcessToJobObject(s_job, pi.hProcess);
-    ResumeThread(pi.hThread);
     free(buf);
     CloseHandle(wr);
     if (nul != INVALID_HANDLE_VALUE)
@@ -798,7 +837,7 @@ static int stage_lift(void)
     wchar_t cmd[2 * MAX_PATH];
 
     seg(LIFT_LO, LIFT_LO + 0.005, 3000, L"Step 3 of 5: Translating the game's code", L"Starting");
-    swprintf(cmd, 2 * MAX_PATH, L"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%s\\scripts\\recompile.ps1\"", s_dir);
+    swprintf(cmd, 2 * MAX_PATH, L"powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File \"%s\\scripts\\recompile.ps1\"", s_dir);
     if (run(cmd, s_dir, lift_line, NULL, 0) != 0)
         return fail(L"The game's code couldn't be translated.",
                     L"The details are in logs\\install.log in the install folder.");
@@ -863,7 +902,7 @@ static int stage_build(void)
     s_compile_total += count_c(p, 0);
     path_join(p, s_dir, L"external\\xboxrecomp\\src");
     s_compile_total += count_c(p, 1) + 9;      /* main.c and the others twice, the launcher */
-    swprintf(cmd, 2 * MAX_PATH, L"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%s\\scripts\\build.ps1\"", s_dir);
+    swprintf(cmd, 2 * MAX_PATH, L"powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File \"%s\\scripts\\build.ps1\"", s_dir);
     if (run(cmd, s_dir, build_line, NULL, 0) != 0) {
         wchar_t adv[512];
         if (s_first_error[0])
