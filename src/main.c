@@ -749,8 +749,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
      *
      * The enhanced mode's settings, which a launcher edits, are in
      * nightfire.ini (NF_INI, else in the working directory): [Graphics]
-     * Resolution = n draws at n times the console's 640x480
-     * (RECOMP_GPUBE_SCALE, src/nv2a_d3d11_backend.c); Widescreen = 1 sets the
+     * Resolution = <w>x<h> draws the picture at that size, n (1-8) at n
+     * times the console's 640x480 (RECOMP_GPUBE_SIZE, RECOMP_GPUBE_SCALE,
+     * src/nv2a_d3d11_backend.c); Widescreen = 1 sets the
      * console's widescreen setting, for which both images draw a 16:9
      * picture into their 640x480 as for a widescreen TV (the main game's
      * cameras, sub_00025190; the driving image's display mode, sub_0007CFB0),
@@ -777,13 +778,34 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 _putenv(e);
             }
         }
-        if (!getenv("RECOMP_GPUBE_SCALE")) {
-            int sc = have ? (int)nf_ini_int(path, "Resolution", "Aufloesung", 1) : 1;
-            if (sc < 1 || sc > 8)
-                sc = 1;
-            snprintf(v, sizeof v, "RECOMP_GPUBE_SCALE=%d", sc);
+        /* Resolution = <w>x<h>, the size the picture is drawn at (the
+         * launcher's list of monitor sizes), or n (1-8), the older steps of
+         * n times 640x480. */
+        if (!getenv("RECOMP_GPUBE_SCALE") && !getenv("RECOMP_GPUBE_SIZE")) {
+            char r[32] = "";
+            unsigned rw = 0, rh = 0;
+            if (have) {
+                GetPrivateProfileStringA("Graphics", "Resolution", "", r, sizeof r, path);
+                if (!r[0])
+                    GetPrivateProfileStringA("Grafik", "Aufloesung", "", r, sizeof r, path);
+            }
+            if (sscanf(r, "%u x %u", &rw, &rh) == 2 && rw >= 320 && rh >= 240
+                    && rw <= 7680 && rh <= 4320) {
+                snprintf(v, sizeof v, "RECOMP_GPUBE_SIZE=%ux%u", rw, rh);
+            } else {
+                int sc = atoi(r);
+                if (sc < 1 || sc > 8)
+                    sc = 1;
+                snprintf(v, sizeof v, "RECOMP_GPUBE_SCALE=%d", sc);
+            }
             _putenv(v);
         }
+        /* DrivingAA = 1 keeps the driving missions' anti-aliasing (two
+         * samples a pixel, averaged); 0, the default, draws them at the
+         * shown size instead (RECOMP_GPUBE_NO_AA, src/nv2a_d3d11_backend.c). */
+        if (!getenv("RECOMP_GPUBE_NO_AA")
+                && !(have && nf_ini_int(path, "DrivingAA", "DrivingAA", 0)))
+            _putenv("RECOMP_GPUBE_NO_AA=1");
         if (!getenv("RECOMP_GPUBE_ANISO")) {
             int an = have ? (int)nf_ini_int(path, "Anisotropy", "Anisotropie", 1) : 1;
             snprintf(v, sizeof v, "RECOMP_GPUBE_ANISO=%d", an);
@@ -796,17 +818,34 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         if (!getenv("RECOMP_PRESENT_VSYNC") && have
                 && !nf_ini_int(path, "VSync", "VSync", 1))
             _putenv("RECOMP_PRESENT_VSYNC=0");
-        if (!getenv("RECOMP_VIDEO_FLAGS") && have
-                && nf_ini_int(path, "Widescreen", "Breitbild", 0)) {
-            _putenv("RECOMP_VIDEO_FLAGS=0x10000");       /* XC_VIDEO widescreen */
-            if (!getenv("RECOMP_DISPLAY_ASPECT"))
-                _putenv("RECOMP_DISPLAY_ASPECT=16:9");
+        /* Widescreen = 1 is 16:9, 2 ultrawide (21:9): the game's own 16:9
+         * mode, widened to the shape of Resolution (3440x1440 is 2.389:1;
+         * 21:9 without a size) by the main game's cameras (manual_main.c,
+         * sub_00025190) and the driving image's aspect (below, at boot). */
+        if (!getenv("RECOMP_VIDEO_FLAGS") && have) {
+            int ws = nf_ini_int(path, "Widescreen", "Breitbild", 0);
+            if (ws) {
+                _putenv("RECOMP_VIDEO_FLAGS=0x10000");   /* XC_VIDEO widescreen */
+                if (!getenv("RECOMP_DISPLAY_ASPECT")) {
+                    char r[32] = "";
+                    unsigned rw = 0, rh = 0;
+                    GetPrivateProfileStringA("Graphics", "Resolution", "", r, sizeof r, path);
+                    if (ws == 2 && sscanf(r, "%u x %u", &rw, &rh) == 2 && rh
+                            && (float)rw / (float)rh > 2.0f)
+                        snprintf(v, sizeof v, "RECOMP_DISPLAY_ASPECT=%u:%u", rw, rh);
+                    else
+                        snprintf(v, sizeof v, "RECOMP_DISPLAY_ASPECT=%s", ws == 2 ? "21:9" : "16:9");
+                    _putenv(v);
+                }
+            }
         }
     } else {
         _putenv("RECOMP_MKB=");
         _putenv("RECOMP_KEYBOARD=");
         _putenv("RECOMP_HIDE_CURSOR=1");
         _putenv("RECOMP_GPUBE_SCALE=");
+        _putenv("RECOMP_GPUBE_SIZE=");
+        _putenv("RECOMP_GPUBE_NO_AA=");
         _putenv("RECOMP_GPUBE_ANISO=");
         _putenv("RECOMP_VIDEO_FLAGS=");
         _putenv("RECOMP_DISPLAY_ASPECT=");
@@ -1011,6 +1050,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 && !nf_viv_has("driving\\misc.viv", "ntsc\\eng\\")) {
             *((uint8_t *)g_xbox_mem_offset + 0x1B7057) = 0;
             fprintf(stderr, "[BOOT] no %s: driving movies off\n", ntsc);
+        }
+    }
+    /* Ultrawide (RECOMP_DISPLAY_ASPECT wider than 16:9, enhanced only): the
+     * driving image takes its widescreen picture's shape from the float at
+     * 0x19245C (16/9 in .rdata, read by sub_00096960 and sub_00096EB0 when
+     * its display mode is widescreen); that shape instead. */
+    if (nf_enhanced()) {
+        const char *a = getenv("RECOMP_DISPLAY_ASPECT");
+        float ax = 0.0f, ay = 0.0f;
+        if (a && sscanf(a, "%f:%f", &ax, &ay) == 2 && ax > 0.0f && ay > 0.0f
+                && ax / ay > 16.0f / 9.0f + 0.01f) {
+            float as = ax / ay;
+            memcpy((uint8_t *)g_xbox_mem_offset + 0x19245C, &as, 4);
+            fprintf(stderr, "[BOOT] driving picture at %.3f:1\n", as);
         }
     }
     {

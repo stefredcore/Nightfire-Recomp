@@ -818,6 +818,49 @@ static float display_squeeze(void)
     return sq;
 }
 
+/* Ultrawide (enhanced, RECOMP_DISPLAY_ASPECT wider than 16:9): the shape of
+ * the picture, else 0. */
+static float display_ultrawide(void)
+{
+    static float as = -1.0f;
+    if (as < 0.0f) {
+        const char *e = getenv("RECOMP_DISPLAY_ASPECT");
+        float a = 0.0f, b = 0.0f;
+        as = 0.0f;
+        if (e && sscanf(e, "%f:%f", &a, &b) == 2 && a > 0.0f && b > 0.0f
+                && a / b > 16.0f / 9.0f + 0.01f)
+            as = a / b;
+    }
+    return as;
+}
+
+/* A camera's projection (index [esp+4], camera at [0x1F661C + 4 * index]):
+ * the title sets its shape at +0x100 to 4/3, or 16/9 with the console's
+ * widescreen setting -- halved or doubled for split-screen -- and divides
+ * the horizontal scale at +0xEC by it. Nightfire on the Xbox has no wider
+ * shape; ultrawide takes the 16:9 one that much wider, so the world fills a
+ * 21:9 picture at the same height (more at the sides, as 16:9 shows more
+ * than 4:3). A shape that is not one the title set -- the call returned
+ * early, the shape is already widened -- is left alone. */
+extern void sub_00025190_gen(void);
+
+void sub_00025190(void)
+{
+    uint32_t cam = MEM32(0x1F661C + (uint32_t)MEM16(g_esp + 4) * 4);
+    float k, v;
+
+    sub_00025190_gen();
+    if (!nf_enhanced() || !cam || !(display_ultrawide() > 0.0f))
+        return;
+    v = MEMF(cam + 0x100);
+    if (fabsf(v - 16.0f / 9.0f) > 1e-4f && fabsf(v - 8.0f / 9.0f) > 1e-4f
+            && fabsf(v - 32.0f / 9.0f) > 1e-4f)
+        return;
+    k = display_ultrawide() / (16.0f / 9.0f);
+    MEMF(cam + 0x100) = v * k;
+    MEMF(cam + 0xEC) = MEMF(cam + 0xEC) / k;
+}
+
 /* A menu over the world (a window counting 3, the pause menu): its frame, for
  * the back end to squeeze the whole of it about the centre, and for the mouse
  * to undo that. */

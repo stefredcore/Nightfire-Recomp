@@ -5,6 +5,7 @@
  * "both modes" in its body, an enhancement asks nf_enhanced() first.
  */
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -114,12 +115,17 @@ void sub_00083190(void)
  * trigger at +0x2C. */
 static void race_menu_mouse(uint32_t pad);
 
+static void race_fov_apply(void);
+
 void sub_00051B40(void)
 {
     uint32_t dev = g_ecx, cur;
 
     sub_00051B40_gen();
-    if (!nf_enhanced() || !dev || MEM32(dev + 0x18) != 0)
+    if (!nf_enhanced())
+        return;
+    race_fov_apply();
+    if (!dev || MEM32(dev + 0x18) != 0)
         return;
     s_input_frame++;
     if ((cur = MEM32(dev + 0xC)) != 0 && (MEMF(cur + 8) != 0.0f || MEMF(cur + 12) != 0.0f))
@@ -203,6 +209,52 @@ static float race_squeeze(void)
     return sq;
 }
 
+void nf_backend_menu_box(int on, int x0, int y0, int x1, int y1);   /* nv2a_d3d11_backend.c */
+
+/* Ultrawide (enhanced): the field of view. The driving image's cameras take
+ * their angle times the display's field-of-view scale at [0x1EBFF4]+0x58
+ * (sub_00096EB0 for the picture, sub_000CE2B0 for the aim), and widescreen
+ * times 1.25 more with the picture's shape at 16/9 (0x19245C): the angle a
+ * 60 degree 4:3 view has across 16:9 at the same height. main.c sets that
+ * shape to the ultrawide one; alone, it took height off the picture -- the
+ * world zoomed in. The scale grows the same way, 75 degrees across 16:9
+ * to what the same height shows across the wider shape (1.22 for 3440x1440),
+ * so the picture keeps 16:9's height and gains at the sides. The scale is
+ * 1 unless a mission's tuning sets it (sub_00043670); race_fov_apply keeps
+ * whatever the title set, times this. */
+static float race_fov_widen(void)
+{
+    static float m = -1.0f;
+    if (m < 0.0f) {
+        const char *e = getenv("RECOMP_DISPLAY_ASPECT");
+        float a = 0.0f, b = 0.0f;
+        m = 1.0f;
+        if (e && sscanf(e, "%f:%f", &a, &b) == 2 && a > 0.0f && b > 0.0f
+                && a / b > 16.0f / 9.0f + 0.01f) {
+            const float half = 37.5f * 3.14159265f / 180.0f;   /* half of 75 degrees */
+            m = 2.0f * atanf(tanf(half) * (a / b) / (16.0f / 9.0f)) / (2.0f * half);
+        }
+    }
+    return m;
+}
+
+/* Each frame: the scale the title set (what is there unless it is what was
+ * written last), times race_fov_widen. */
+static void race_fov_apply(void)
+{
+    static float base, written;
+    uint32_t d = MEM32(0x1EBFF4);
+    float v;
+
+    if (race_fov_widen() == 1.0f || !d)
+        return;
+    v = MEMF(d + 0x58);
+    if (v != written)
+        base = v;
+    written = base * race_fov_widen();
+    MEMF(d + 0x58) = written;
+}
+
 static void race_menu_mouse(uint32_t pad)
 {
     static int lx, ly, armed, on, was, vsteps, hsteps, accept, phase;
@@ -213,8 +265,13 @@ static void race_menu_mouse(uint32_t pad)
 
     if (!m || !MEM8(m + 0x2B0) || MEM32(m + 0x478) != 1) {
         armed = on = vsteps = hsteps = accept = 0;
+        nf_backend_menu_box(0, 0, 0, 0, 0);
         return;
     }
+    /* Ultrawide: the menu squeezed as one picture about the centre, as
+     * race_squeeze maps the pointer -- every draw while it is open (the
+     * back end's hud_inputs, in the inputs' 640x480, past their edges). */
+    nf_backend_menu_box(1, -200, -200, 840, 680);
     /* The left button is also the A in mkb.ini's driving layout: in this menu
      * a click means where it lands, not the chosen entry. */
     if (mkb_pointer_click())

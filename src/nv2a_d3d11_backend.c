@@ -64,7 +64,10 @@ extern ptrdiff_t g_xbox_mem_offset;
 /* The framebuffer window's larger frame (xboxrecomp video_player.h). */
 typedef struct {
     void    *handle;
-    uint32_t scale;
+    uint32_t scale;             /* down; across too unless scale_x is set */
+    uint32_t scale_x;           /* across */
+    float    fx, fy;            /* the exact factors, when not 0 */
+    uint32_t flags;             /* 1: shown as it is, not resolved */
 } XboxFramebufferGpuFrame;
 typedef int (*XboxFramebufferGpu)(uint32_t fb_va, uint32_t pitch,
                                   XboxFramebufferGpuFrame *out);
@@ -449,10 +452,15 @@ typedef struct {
     uint32_t last_use;
     ID3D11Texture2D *relay;     /* rt_relayout_gpu's target, same size and format */
     ID3D11RenderTargetView *relay_rtv;
-    /* Drawn sc times as wide and high (rt_scale): tex is that large surface,
-     * lo the title's size, which is what guest memory gets and gives. mem is
-     * what was last written to guest memory, mem_ok while it is valid. */
-    uint32_t sc;
+    /* Drawn fx times as wide and fy times as high (rt_scale_xy), tw x th
+     * pixels, big when that is not the title's size: tex is that large
+     * surface, lo the title's size, which is what guest memory gets and
+     * gives. mem is what was last written to guest memory, mem_ok while it is
+     * valid. */
+    float fx, fy;
+    uint32_t tw, th;
+    int big;
+    uint32_t ax, ay;            /* anti-aliasing samples left out (rt_drop_aa) */
     ID3D11Texture2D *lo;
     ID3D11RenderTargetView *lo_rtv;
     ID3D11ShaderResourceView *lo_srv;
@@ -697,57 +705,142 @@ static int rt_relayout_gpu(Rt *r, int swz)
     return 1;
 }
 
-/* Higher resolution. RECOMP_GPUBE_SCALE=<n> (2-8) draws every linear colour
- * surface, and the depth buffer that goes with it, n times as wide and high:
- * the viewport is n times larger, so the title's surface pixels land on the
- * large surface unchanged, only finer. Guest memory keeps the title's size --
- * the title reads its surfaces, copies them, samples them as textures -- so
- * a large surface goes to memory averaged down n x n (rt_queue) and comes
- * from memory blown up (rt_upload), except when memory still holds what it
- * last got from the surface: then the large surface already has it. The
- * window shows the large surface the title flipped to (be_window_frame).
+/* Higher resolution. Every linear colour surface, and the depth buffer that
+ * goes with it, is drawn fx times as wide and fy times as high: the viewport
+ * is that much larger, so the title's surface pixels land on the large
+ * surface unchanged, only finer. Guest memory keeps the title's size -- the
+ * title reads its surfaces, copies them, samples them as textures -- so a
+ * large surface goes to memory filtered down (rt_queue: each title pixel the
+ * area-weighted mean of what covers it) and comes from memory blown up
+ * (rt_upload), except when memory still holds what it last got from the
+ * surface: then the large surface already has it. The window shows the large
+ * surface the title flipped to (be_window_frame).
+ *
+ * RECOMP_GPUBE_SIZE=<w>x<h> sets the size the shown 640x480 is drawn at -- a
+ * monitor's resolution (src/main.c from nightfire.ini Resolution, the
+ * launcher's list): 1920x1080 gives fx 3, fy 2.25. With widescreen the title
+ * draws its world squeezed into 640x480 for 16:9, so a 16:9 size draws every
+ * column the monitor shows. Else RECOMP_GPUBE_SCALE=<n> (2-8), the older
+ * steps: n x n, and with widescreen the width n times 16:9 over 4:3, rounded
+ * (2560x1440 at 3); n = 1 stays 640x480. RECOMP_GPUBE_SCALE_X=<n> sets the
+ * width's step by hand.
  *
  * Swizzled surfaces (render to texture) stay at the title's size, and so does
  * everything in shadow mode, which compares against the CPU rasteriser. The
  * caller sets it only for the enhanced game (src/main.c). */
-static uint32_t rt_scale(void)
+static int rt_drop_aa(void);
+
+static void rt_scale_xy(float *out_x, float *out_y)
 {
-    static int sc = -1;
-    if (sc < 0) {
-        const char *e = getenv("RECOMP_GPUBE_SCALE");
-        sc = e ? atoi(e) : 1;
-        if (sc < 1 || sc > 8 || nv2a_backend_shadow())
-            sc = 1;
+    static float fx = -1.0f, fy = -1.0f;
+    if (fy < 0.0f) {
+        const char *e = getenv("RECOMP_GPUBE_SCALE"), *ex = getenv("RECOMP_GPUBE_SCALE_X");
+        const char *a = getenv("RECOMP_DISPLAY_ASPECT"), *sz = getenv("RECOMP_GPUBE_SIZE");
+        float ax = 0.0f, ay = 0.0f;
+        unsigned sw = 0, sh = 0;
+        int sy;
+
+        if (nv2a_backend_shadow()) {
+            fx = fy = 1.0f;
+        } else if (sz && sscanf(sz, "%u x %u", &sw, &sh) == 2 && sw >= 320 && sh >= 240
+                   && sw <= 7680 && sh <= 4320) {
+            fx = (float)sw / 640.0f;
+            fy = (float)sh / 480.0f;
 #ifdef NIGHTFIRE_DRIVING
-        /* The driving image's surface is twice as wide (anti-aliasing), so
-         * the same n would be twice the pixels of the main game: 5120x1920
-         * at 4, more than the GPU holds at 50 fps in Paris. Each axis gets
-         * 1/sqrt(2) of n, rounded up, for about the main game's pixels. */
-        sc = (sc * 71 + 99) / 100;
+            /* The driving image's surface is twice as wide (anti-aliasing):
+             * above 1440 lines it gets 1/sqrt(2) of the height's factor, not
+             * less than 3, for about the main game's pixels -- 3840x2160
+             * draws its 1280x480 at 1536 lines, which the window shows at
+             * 2160. Not when the samples are left out (rt_drop_aa). */
+            if (fy > 3.0f && !rt_drop_aa()) {
+                float r = (fy * 0.71f > 3.0f ? fy * 0.71f : 3.0f) / fy;
+                fx *= r;
+                fy *= r;
+            }
 #endif
-        if (sc > 1)
-            fprintf(stderr, "[GPUBE] drawing at %dx the title's resolution\n", sc);
+        } else {
+            sy = e ? atoi(e) : 1;
+            if (sy < 1 || sy > 8)
+                sy = 1;
+#ifdef NIGHTFIRE_DRIVING
+            /* The driving image's surface is twice as wide (anti-aliasing), so
+             * the same n would be twice the pixels of the main game: 5120x1920
+             * at 4, more than the GPU holds at 50 fps in Paris. Each axis gets
+             * 1/sqrt(2) of n, rounded up, for about the main game's pixels --
+             * unless the samples are left out (rt_drop_aa). */
+            if (!rt_drop_aa())
+                sy = (sy * 71 + 99) / 100;
+#endif
+            fy = (float)sy;
+            fx = fy;
+            if (sy > 1 && a && sscanf(a, "%f:%f", &ax, &ay) == 2 && ax > 0.0f && ay > 0.0f
+                    && ax / ay > 4.0f / 3.0f + 0.01f)
+                fx = (float)lrintf((float)sy * (ax / ay) / (4.0f / 3.0f));
+            if (ex && atoi(ex) >= 1 && atoi(ex) <= 16 && sy > 1)
+                fx = (float)atoi(ex);
+        }
+        if (fx != 1.0f || fy != 1.0f)
+            fprintf(stderr, "[GPUBE] drawing at %.3fx the title's width and %.3fx its height\n",
+                    fx, fy);
     }
-    return (uint32_t)sc;
+    *out_x = fx;
+    *out_y = fy;
 }
 
+/* RECOMP_GPUBE_NO_AA=1 (the enhanced game, nightfire.ini DrivingAA = 0):
+ * a surface the title draws anti-aliased -- the driving image's 1280x480,
+ * two samples a pixel, which the window averages -- is drawn at the shown
+ * size instead, its factors divided by the samples, and shown as it is. At
+ * a monitor's size the samples smoothed little and cost half the GPU; the
+ * driving missions draw native 4K that way at what 2560x1440 cost before.
+ * The title still draws to its 1280x480: only fewer pixels make it up. */
+static int rt_drop_aa(void)
+{
+    static int on = -1;
+    if (on < 0) {
+        const char *e = getenv("RECOMP_GPUBE_NO_AA");
+        on = e && e[0] == '1' && !nv2a_backend_shadow();
+        if (on)
+            fprintf(stderr, "[GPUBE] anti-aliased surfaces drawn at the shown size\n");
+    }
+    return on;
+}
+
+/* Drawn at another size than the title's. */
+static int rt_scaled(void)
+{
+    float fx, fy;
+    rt_scale_xy(&fx, &fy);
+    return fx != 1.0f || fy != 1.0f;
+}
+
+/* sf: large pixels per title pixel; ssz: the source's size in pixels. */
 static const char s_scale_hlsl[] =
-    "cbuffer S : register(b0) { uint sc, s0, s1, s2; };\n"
+    "cbuffer S : register(b0) { float2 sf; uint2 ssz; };\n"
     "Texture2D<float4> ssrc : register(t0);\n"
     "float4 svs(uint id : SV_VertexID) : SV_Position {\n"
     "    float2 p = float2((id << 1) & 2, id & 2);\n"
     "    return float4(p * float2(2, -2) + float2(-1, 1), 0, 1);\n"
     "}\n"
-    /* the title's pixel: the mean of the sc x sc it was drawn as */
+    /* the title's pixel: the mean of what was drawn over it, each large pixel
+     * weighted by how much of it lies inside (all 1 at a whole factor) */
     "float4 sdown(float4 pos : SV_Position) : SV_Target {\n"
-    "    uint2 b = (uint2)pos.xy * sc; float4 a = 0;\n"
-    "    for (uint y = 0; y < sc; y++) for (uint x = 0; x < sc; x++)\n"
-    "        a += ssrc.Load(int3(b + uint2(x, y), 0));\n"
-    "    return a / (float)(sc * sc);\n"
+    "    float2 p = floor(pos.xy), s0 = p * sf, s1 = (p + 1.0) * sf;\n"
+    "    int2 i0 = (int2)floor(s0), i1 = min((int2)ceil(s1) - 1, (int2)ssz - 1);\n"
+    "    float4 a = 0; float n = 0;\n"
+    "    for (int y = i0.y; y <= i1.y; y++) {\n"
+    "        float wy = min((float)y + 1.0, s1.y) - max((float)y, s0.y);\n"
+    "        for (int x = i0.x; x <= i1.x; x++) {\n"
+    "            float w = (min((float)x + 1.0, s1.x) - max((float)x, s0.x)) * wy;\n"
+    "            a += ssrc.Load(int3(x, y, 0)) * w; n += w;\n"
+    "        }\n"
+    "    }\n"
+    "    return a / max(n, 1e-6);\n"
     "}\n"
-    /* ... and back: each of the sc x sc gets it */
+    /* ... and back: each large pixel gets the title pixel it lies in */
     "float4 sup(float4 pos : SV_Position) : SV_Target {\n"
-    "    return ssrc.Load(int3((uint2)pos.xy / sc, 0));\n"
+    "    int2 q = min((int2)floor(pos.xy / sf), (int2)ssz - 1);\n"
+    "    return ssrc.Load(int3(q, 0));\n"
     "}\n";
 
 static ID3D11VertexShader    *s_scl_vs;
@@ -794,15 +887,22 @@ static int scale_ready(void)
     return s_scl_ok;
 }
 
-/* ps over all of dst (w x h) reading src, then bind's target and viewport
+/* ps over all of dst (w x h) reading src (sw x sh, f large pixels per title
+ * pixel), then bind's target and viewport
  * back, as rt_relayout_gpu does. */
 static void scale_pass(ID3D11PixelShader *ps, ID3D11ShaderResourceView *src,
-                       ID3D11RenderTargetView *dst, uint32_t w, uint32_t h, uint32_t sc)
+                       ID3D11RenderTargetView *dst, uint32_t w, uint32_t h,
+                       float fx, float fy, uint32_t sw, uint32_t sh)
 {
     D3D11_VIEWPORT vp, saved_vp[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
     UINT nvp = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
     ID3D11ShaderResourceView *none = NULL;
-    uint32_t cb[4] = { sc, 0, 0, 0 };
+    uint32_t cb[4];
+
+    memcpy(&cb[0], &fx, 4);
+    memcpy(&cb[1], &fy, 4);
+    cb[2] = sw;
+    cb[3] = sh;
 
     ID3D11DeviceContext_UpdateSubresource(s_ctx, (ID3D11Resource *)s_scl_cb, 0, NULL, cb, 0, 0);
     ID3D11DeviceContext_RSGetViewports(s_ctx, &nvp, saved_vp);
@@ -966,7 +1066,7 @@ static void rt_queue(Rt *r)
 {
     if (!r->dirty)
         return;
-    if (lazy_wb() && r->sc > 1 && !s_wb_force)
+    if (lazy_wb() && r->big && !s_wb_force)
         return;
     /* Shadow mode: guest memory holds the CPU rasteriser's frame, the one
      * being compared against. Never write over it. */
@@ -976,21 +1076,21 @@ static void rt_queue(Rt *r)
     }
     if (!r->staging) {
         D3D11_TEXTURE2D_DESC td;
-        ID3D11Texture2D_GetDesc(r->sc > 1 ? r->lo : r->tex, &td);
+        ID3D11Texture2D_GetDesc(r->big ? r->lo : r->tex, &td);
         td.Usage = D3D11_USAGE_STAGING;
         td.BindFlags = 0;
         td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
         if (FAILED(ID3D11Device_CreateTexture2D(s_dev, &td, NULL, &r->staging)))
             return;
     }
-    if (r->sc > 1) {
+    if (r->big) {
         if (!r->srv && FAILED(ID3D11Device_CreateShaderResourceView(
                 s_dev, (ID3D11Resource *)r->tex, NULL, &r->srv)))
             return;
-        scale_pass(s_scl_down, r->srv, r->lo_rtv, r->w, r->h, r->sc);
+        scale_pass(s_scl_down, r->srv, r->lo_rtv, r->w, r->h, r->fx, r->fy, r->tw, r->th);
     }
     ID3D11DeviceContext_CopyResource(s_ctx, (ID3D11Resource *)r->staging,
-                                     (ID3D11Resource *)(r->sc > 1 ? r->lo : r->tex));
+                                     (ID3D11Resource *)(r->big ? r->lo : r->tex));
     r->dirty = 0;
     r->pending = 1;
 }
@@ -1038,14 +1138,14 @@ static void rt_complete_all(void)
 
 static void rt_upload(Rt *r)
 {
-    if (r->sc > 1) {
+    if (r->big) {
         /* Memory still holds what the surface last wrote there: the large
          * surface has the same picture, sharper. */
         if (r->mem_ok && !memcmp(GUEST(r->va), r->mem, (size_t)r->pitch * r->h))
             return;
         ID3D11DeviceContext_UpdateSubresource(s_ctx, (ID3D11Resource *)r->lo, 0, NULL,
                                               GUEST(r->va), r->pitch, 0);
-        scale_pass(s_scl_up, r->lo_srv, r->rtv, r->w * r->sc, r->h * r->sc, r->sc);
+        scale_pass(s_scl_up, r->lo_srv, r->rtv, r->tw, r->th, r->fx, r->fy, r->w, r->h);
         r->mem_ok = 0;
         return;
     }
@@ -1082,7 +1182,8 @@ static Rt *rt_get(const Nv2aSurface *s)
 {
     Rt *r, *victim = &s_rt[0];
     D3D11_TEXTURE2D_DESC td;
-    uint32_t w, h, pitch, i, sc;
+    uint32_t w, h, pitch, i, tw, th, ax, ay;
+    float fx, fy;
     int swz = SURF_SWZ(s);
 
     if (s->bytes_per_pixel != 4 && s->bytes_per_pixel != 2)
@@ -1107,7 +1208,7 @@ static Rt *rt_get(const Nv2aSurface *s)
         if (r->tex && r->va == s->color_va && r->bpp == s->bytes_per_pixel
                 && r->w == w && r->h == h && r->swz != swz
                 && r->pitch == w * r->bpp && pitch == w * r->bpp) {
-            if (r->sc > 1) {
+            if (r->big) {
                 victim = r;
                 break;
             }
@@ -1124,10 +1225,30 @@ static Rt *rt_get(const Nv2aSurface *s)
         rt_download(r);
         rt_free(r);
     }
-    sc = swz ? 1 : rt_scale();
-    if (sc > 1 && (w * sc > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION
-                   || h * sc > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION || !scale_ready()))
-        sc = 1;
+    ax = ay = 1;
+    if (swz) {
+        fx = fy = 1.0f;
+    } else {
+        rt_scale_xy(&fx, &fy);
+        if (rt_drop_aa() && (s->aa_sx > 1 || s->aa_sy > 1)) {
+            ax = s->aa_sx > 1 ? s->aa_sx : 1;
+            ay = s->aa_sy > 1 ? s->aa_sy : 1;
+            fx /= (float)ax;
+            fy /= (float)ay;
+        }
+    }
+    tw = (uint32_t)lrintf((float)w * fx);
+    th = (uint32_t)lrintf((float)h * fy);
+    if (tw < 1) tw = 1;
+    if (th < 1) th = 1;
+    if ((tw != w || th != h) && (tw > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION
+                                 || th > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION
+                                 || !scale_ready())) {
+        fx = fy = 1.0f;
+        tw = w;
+        th = h;
+        ax = ay = 1;
+    }
     memset(&td, 0, sizeof td);
     td.Width = w;
     td.Height = h;
@@ -1138,7 +1259,7 @@ static Rt *rt_get(const Nv2aSurface *s)
     td.SampleDesc.Count = 1;
     td.Usage = D3D11_USAGE_DEFAULT;
     td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-    if (sc > 1
+    if ((tw != w || th != h)
             && (FAILED(ID3D11Device_CreateTexture2D(s_dev, &td, NULL, &r->lo))
                 || FAILED(ID3D11Device_CreateRenderTargetView(s_dev, (ID3D11Resource *)r->lo,
                                                               NULL, &r->lo_rtv))
@@ -1148,15 +1269,21 @@ static Rt *rt_get(const Nv2aSurface *s)
         rt_free(r);
         return NULL;
     }
-    td.Width = w * sc;
-    td.Height = h * sc;
+    td.Width = tw;
+    td.Height = th;
     if (FAILED(ID3D11Device_CreateTexture2D(s_dev, &td, NULL, &r->tex))
             || FAILED(ID3D11Device_CreateRenderTargetView(s_dev, (ID3D11Resource *)r->tex,
                                                           NULL, &r->rtv))) {
         rt_free(r);
         return NULL;
     }
-    r->sc = sc;
+    r->fx = fx;
+    r->fy = fy;
+    r->tw = tw;
+    r->th = th;
+    r->big = tw != w || th != h;
+    r->ax = ax;
+    r->ay = ay;
     r->va = s->color_va;
     r->pitch = pitch;
     r->bpp = s->bytes_per_pixel;
@@ -1167,8 +1294,8 @@ static Rt *rt_get(const Nv2aSurface *s)
     r->frame = s_frame - 1;     /* not current this frame */
     fprintf(stderr, "[GPUBE] surface %08X..%08X %ux%u %ubpp%s", r->va,
             r->va + rt_bytes(r), r->w, r->h, r->bpp * 8, swz ? " swizzled" : "");
-    if (sc > 1)
-        fprintf(stderr, ", drawn at %ux%u", w * sc, h * sc);
+    if (r->big)
+        fprintf(stderr, ", drawn at %ux%u", tw, th);
     fprintf(stderr, "\n");
     return r;
 }
@@ -1230,7 +1357,7 @@ static int bind(const Nv2aSurface *s, const Nv2aRenderState *rs)
     if (!r)
         return 0;
     if (rs && rs->zeta_va)
-        d = ds_get(rs->zeta_va, r->w * r->sc, r->h * r->sc);
+        d = ds_get(rs->zeta_va, r->tw, r->th);
     if (r != s_cur_rt) {
         if (s_cur_rt)
             rt_queue(s_cur_rt);
@@ -1254,7 +1381,7 @@ static int bind(const Nv2aSurface *s, const Nv2aRenderState *rs)
         s_cur_ds = d;
     }
     vp.TopLeftX = 0; vp.TopLeftY = 0;
-    vp.Width = (float)(r->w * r->sc); vp.Height = (float)(r->h * r->sc);
+    vp.Width = (float)r->tw; vp.Height = (float)r->th;
     vp.MinDepth = 0; vp.MaxDepth = 1;
     ID3D11DeviceContext_RSSetViewports(s_ctx, 1, &vp);
     return 1;
@@ -1714,7 +1841,7 @@ static ID3D11ShaderResourceView *tex_from_surface(const Nv2aTexture *t)
                 return NULL;
             return r->srv;
         }
-        if (r->sc > 1)
+        if (r->big)
             rt_download(r);
         else
             rt_complete(r);
@@ -2098,8 +2225,10 @@ static ID3D11RasterizerState *raster_state(const Nv2aRenderState *rs)
         return s_rs;
     bias = (INT)lrintf(rs->poly_offset_units * (zscale(rs) > 70000.0f ? 1.0f : 256.0f));
     /* Per pixel of the drawn surface: a large one's pixel spans 1/sc of the
-     * title's, and so 1/sc of the depth change the factor is applied to. */
-    slope = rs->poly_offset_factor * (s_cur_rt ? (float)s_cur_rt->sc : 1.0f);
+     * title's, and so 1/sc of the depth change the factor is applied to --
+     * the larger of the two factors, so the offset never comes out short. */
+    slope = rs->poly_offset_factor
+          * (s_cur_rt ? (s_cur_rt->fx > s_cur_rt->fy ? s_cur_rt->fx : s_cur_rt->fy) : 1.0f);
     if (!bias && slope == 0.0f)
         return s_rs;
     for (i = 0; i < n; i++)
@@ -2134,9 +2263,9 @@ static ID3D11RasterizerState *raster_clip(const Nv2aRenderState *rs)
 {
     static int on = -1;
     D3D11_RECT sr;
-    UINT sc = s_cur_rt ? s_cur_rt->sc : 1;
-    LONG w = s_cur_rt ? (LONG)(s_cur_rt->w * sc) : 16384;
-    LONG h = s_cur_rt ? (LONG)(s_cur_rt->h * sc) : 16384;
+    float fx = s_cur_rt ? s_cur_rt->fx : 1.0f, fy = s_cur_rt ? s_cur_rt->fy : 1.0f;
+    LONG w = s_cur_rt ? (LONG)s_cur_rt->tw : 16384;
+    LONG h = s_cur_rt ? (LONG)s_cur_rt->th : 16384;
 
     if (on < 0) {
         const char *e = getenv("RECOMP_GPUBE_WINDOW_CLIP");
@@ -2144,10 +2273,10 @@ static ID3D11RasterizerState *raster_clip(const Nv2aRenderState *rs)
     }
     sr.left = 0; sr.top = 0; sr.right = w; sr.bottom = h;
     if (on && rs && rs->window_clip) {
-        sr.left = (LONG)(rs->window_x0 * sc);
-        sr.top = (LONG)(rs->window_y0 * sc);
-        sr.right = (LONG)(rs->window_x1 * sc);
-        sr.bottom = (LONG)(rs->window_y1 * sc);
+        sr.left = (LONG)lrintf((float)rs->window_x0 * fx);
+        sr.top = (LONG)lrintf((float)rs->window_y0 * fy);
+        sr.right = (LONG)lrintf((float)rs->window_x1 * fx);
+        sr.bottom = (LONG)lrintf((float)rs->window_y1 * fy);
         if (sr.right > w) sr.right = w;
         if (sr.bottom > h) sr.bottom = h;
     }
@@ -2572,6 +2701,11 @@ static size_t prog_hlsl(const Nv2aProgramBatch *pb, char *buf, size_t cap)
     const char *np = persp_color() ? "" : "noperspective ";
     uint32_t k, a;
 
+    { /* The NV2A's 1/16-pixel grid, as the CPU rasteriser applies it
+         * (nv2a_pb_exec.c, subpixel_snap_on); RECOMP_SUBPIXEL_SNAP=0 off. */
+        const char *e = getenv("RECOMP_SUBPIXEL_SNAP");
+        tx(&t, "#define SNAP %d\n", !(e && e[0] == '0'));
+    }
     tx(&t,
        "cbuffer C : register(b0) { float4 vp; float4 tx; float4 wd; };\n"
        "cbuffer P : register(b2) { float4 c[%u]; float4 pa; float4 pf; float4 cf; };\n"
@@ -2710,6 +2844,7 @@ static size_t prog_hlsl(const Nv2aProgramBatch *pb, char *buf, size_t cap)
        "  pos.x = pos.x * pa.x; pos.y = pos.y * pa.y;\n"
        "  precise float w = pos.w, rhw = 1.0 / w;\n"
        "  precise float wc = w > 0.0 ? 1.0 / max(rhw, 1e-20) : w;\n"
+       "  if (SNAP) pos.xy = trunc(pos.xy * 16.0) / 16.0;\n"
        "  precise float sx = pos.x * vp.x - 1.0, sy = 1.0 + pos.y * vp.y, sz = saturate(pos.z * vp.z);\n"
        "  precise float zd = pos.z * w - pa.z * w;\n"
        "  VO o;\n"
@@ -3097,6 +3232,75 @@ static int shown_surface(const Nv2aSurface *s)
         && s->width == 640 * s->aa_sx && s->height == 480 * s->aa_sy;
 }
 
+/* HUD elements that come in more than one draw. A text whose glyphs are not
+ * all on one page of the font yet -- a weapon's name the first moments after
+ * it is picked up -- is drawn in parts, its shadow too, and each part
+ * anchored by itself (left edge, centre, right edge) came apart on the
+ * screen until the text settled into one draw. Draws on the same line that
+ * touch are one group with one anchor; the groups of the frame before are
+ * kept, so a part takes the anchor of the whole text it belonged to then.
+ * RECOMP_HUD_GROUPS=0 anchors every draw by itself, as before. */
+#define HUD_GROUPS 64
+typedef struct { float x0, x1, y0, y1; } HudBox;
+static HudBox s_hud_cur[HUD_GROUPS], s_hud_prev[HUD_GROUPS];
+static int    s_hud_ncur, s_hud_nprev;
+
+static int hud_groups_on(void)
+{
+    static int on = -1;
+    if (on < 0) {
+        const char *e = getenv("RECOMP_HUD_GROUPS");
+        on = !(e && e[0] == '0');
+    }
+    return on;
+}
+
+/* The same line (the vertical ranges overlap by half the smaller height)
+ * and touching or overlapping across (a gap of at most 16 pixels). */
+static int hud_joins(const HudBox *a, const HudBox *b)
+{
+    float oy = fminf(a->y1, b->y1) - fmaxf(a->y0, b->y0);
+    float h = fminf(a->y1 - a->y0, b->y1 - b->y0);
+    return oy >= h * 0.5f && b->x0 <= a->x1 + 16.0f && a->x0 <= b->x1 + 16.0f;
+}
+
+static void hud_merge(HudBox *g, const HudBox *b)
+{
+    g->x0 = fminf(g->x0, b->x0); g->x1 = fmaxf(g->x1, b->x1);
+    g->y0 = fminf(g->y0, b->y0); g->y1 = fmaxf(g->y1, b->y1);
+}
+
+/* The box a draw is anchored by: its group in this frame, widened by the
+ * group it joins from the frame before. */
+static HudBox hud_group(const HudBox *b)
+{
+    HudBox g = *b;
+    int i, k;
+
+    if (!hud_groups_on())
+        return g;
+    for (i = 0; i < s_hud_ncur && !hud_joins(&s_hud_cur[i], b); i++) {}
+    if (i < s_hud_ncur)
+        hud_merge(&s_hud_cur[i], b);
+    else if (s_hud_ncur < HUD_GROUPS)
+        s_hud_cur[s_hud_ncur++] = *b;
+    if (i < s_hud_ncur)
+        g = s_hud_cur[i];
+    for (k = 0; k < s_hud_nprev; k++)
+        if (hud_joins(&s_hud_prev[k], &g)) {
+            hud_merge(&g, &s_hud_prev[k]);
+            break;
+        }
+    return g;
+}
+
+static void hud_groups_flip(void)
+{
+    memcpy(s_hud_prev, s_hud_cur, sizeof s_hud_prev);
+    s_hud_nprev = s_hud_ncur;
+    s_hud_ncur = 0;
+}
+
 /* pb's inputs with the HUD squeezed (hud_squeeze), or pb's own. Notes a
  * draw of the world on the shown surface. */
 static const float *hud_inputs(const Nv2aSurface *s, const Nv2aProgramBatch *pb)
@@ -3106,25 +3310,57 @@ static const float *hud_inputs(const Nv2aSurface *s, const Nv2aProgramBatch *pb)
     float sq = hud_squeeze(), x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f, cx, w;
     uint32_t n = 0, m = pb->input_mask, i;
     size_t need;
+    float zhud = 0.0f;
+    int drv = 0;
 
     if (sq >= 1.0f || !shown_surface(s))
         return pb->inputs;
-    /* The world: a program of 10 instructions or more (the main game's
-     * shortest is 11). Menus, loading screens and stills -- the driving
-     * image's too, which has no HUD of this kind -- take 2 to 9. */
+#ifdef NIGHTFIRE_DRIVING
+    /* The driving image draws its HUD for 16:9 itself, through programs of
+     * its own on 640x480 inputs, which they map onto the 16:9 picture:
+     * 8 instructions at z 1 (the gun at the bottom left, the crosshair, the
+     * loading screen's tiles; at another z, sprites in the world), 3 at z 0
+     * (texts: the weapon's name, the ammunition) and 7 at z 1 (fades and
+     * bars across the picture). The mapping is linear, so squeezing the
+     * inputs squeezes what is drawn. Ultrawide shows that 16:9 HUD wider
+     * still: squeezed by 16:9 over the picture's shape, each element in its
+     * place as below. RECOMP_DISPLAY_ASPECT 16:9 leaves it as it is. */
+    sq = (16.0f / 9.0f) / s_wide_aspect;
     if (pb->length >= 10) {
         s_world_seen = 1;
         return pb->inputs;
     }
-    if (pb->length != 5 || !(pb->input_mask & 1) || s->aa_sx != 1)
+    if (sq >= 0.999f || !s_world_seen)
         return pb->inputs;
-    if (!s_world_seen)
-        return pb->inputs;              /* a menu: drawn for 4:3, shown at 4:3 */
+    if (pb->length == 8 && pb->input_mask == 0x0007)
+        zhud = 1.0f;
+    else if (pb->length == 3 && pb->input_mask == 0x0209)
+        zhud = 0.0f;
+    else if (pb->length == 7 && pb->input_mask == 0x0003)
+        zhud = 1.0f;
+    else
+        return pb->inputs;
+    drv = 1;
+#endif
+    /* The world: a program of 10 instructions or more (the main game's
+     * shortest is 11). Menus, loading screens and stills -- the driving
+     * image's too, which has no HUD of this kind -- take 2 to 9. */
+    if (!drv) {
+        if (pb->length >= 10) {
+            s_world_seen = 1;
+            return pb->inputs;
+        }
+        if (pb->length != 5 || !(pb->input_mask & 1) || s->aa_sx != 1)
+            return pb->inputs;
+        if (!s_world_seen)
+            return pb->inputs;          /* a menu: drawn for 4:3, shown at 4:3 */
+    }
     while (m) { n += m & 1; m >>= 1; }
     for (i = 0; i < pb->vertex_count; i++) {
         const float *v = pb->inputs + (size_t)i * n * 4;
-        if (v[2] != 0.0f) {
-            s_world_seen = 1;           /* not a screen-space overlay */
+        if (v[2] != zhud) {
+            if (!drv)
+                s_world_seen = 1;       /* not a screen-space overlay */
             return pb->inputs;
         }
         if (v[0] < x0) x0 = v[0];
@@ -3132,7 +3368,7 @@ static const float *hud_inputs(const Nv2aSurface *s, const Nv2aProgramBatch *pb)
         if (v[1] < y0) y0 = v[1];
         if (v[1] > y1) y1 = v[1];
     }
-    w = (float)s->width;
+    w = drv ? 640.0f : (float)s->width;
     need = (size_t)pb->vertex_count * n * 4;
     if (cap < need) {
         float *grown = (float *)realloc(buf, need * sizeof *buf);
@@ -3144,8 +3380,10 @@ static const float *hud_inputs(const Nv2aSurface *s, const Nv2aProgramBatch *pb)
     memcpy(buf, pb->inputs, need * sizeof *buf);
     /* On the screen's edge (a fade; the sniper scope's black sides, one draw
      * or one each, whose sight is a draw of its own, squeezed below): the
-     * edge stays, the rest closes in on the centre with the sight. */
-    if (x0 <= 0.5f || x1 >= w - 0.5f) {
+     * edge stays, the rest closes in on the centre with the sight. In the
+     * driving image only across the whole width: its HUD reaches past the
+     * inputs' edges (the gun at x -52), and is an element as any other. */
+    if (drv ? (x0 <= 0.5f && x1 >= w - 0.5f) : (x0 <= 0.5f || x1 >= w - 0.5f)) {
         for (i = 0; i < pb->vertex_count; i++) {
             float *x = buf + (size_t)i * n * 4;
             if (*x > 0.5f && *x < w - 0.5f)
@@ -3157,8 +3395,11 @@ static const float *hud_inputs(const Nv2aSurface *s, const Nv2aProgramBatch *pb)
      * 4:3 HUD stretched: one in the left third keeps its left edge, one in
      * the right third its right edge (the ammo count and its icon stay
      * flush), one in the middle (the crosshair, a message) stays centred. */
-    cx = (x0 + x1) * 0.5f;
-    cx = cx < w / 3.0f ? x0 : cx > w * 2.0f / 3.0f ? x1 : w * 0.5f;
+    {
+        HudBox b = { x0, x1, y0, y1 }, g = hud_group(&b);
+        cx = (g.x0 + g.x1) * 0.5f;
+        cx = cx < w / 3.0f ? g.x0 : cx > w * 2.0f / 3.0f ? g.x1 : w * 0.5f;
+    }
     if (s_menu_box[0] && x0 >= s_menu_box[1] - 8 && x1 <= s_menu_box[3] + 8
             && y0 >= s_menu_box[2] - 8 && y1 <= s_menu_box[4] + 8)
         cx = w * 0.5f;
@@ -3538,6 +3779,7 @@ static void be_flip(void)
     if (hud_squeeze() < 1.0f)
         xbox_FramebufferWindowSetFrameAspect(s_world_seen ? s_wide_aspect : 4.0f / 3.0f);
     s_world_seen = 0;
+    hud_groups_flip();
     if (texstat_on())
         texstat_report();
     if (s_check_tex && (s_frame % 100) == 0) {
@@ -3587,7 +3829,7 @@ static int be_window_frame(uint32_t fb_va, uint32_t pitch, XboxFramebufferGpuFra
     Rt *r = NULL;
 
     for (i = 0; i < MAX_RT; i++)
-        if (s_rt[i].tex && s_rt[i].va == fb_va && s_rt[i].sc > 1 && !s_rt[i].swz
+        if (s_rt[i].tex && s_rt[i].va == fb_va && s_rt[i].big && !s_rt[i].swz
                 && s_rt[i].pitch == pitch) {
             r = &s_rt[i];
             break;
@@ -3626,7 +3868,13 @@ static int be_window_frame(uint32_t fb_va, uint32_t pitch, XboxFramebufferGpuFra
     ID3D11DeviceContext_Flush(s_ctx);   /* on its way before the window waits for it */
     s_share_next = k ^ 1;
     out->handle = s_share[k].handle;
-    out->scale = r->sc;
+    /* Relative to the shown picture: a surface drawn without its samples is
+     * the picture's size times the factors times the samples left out. */
+    out->fx = r->fx * (float)r->ax;
+    out->fy = r->fy * (float)r->ay;
+    out->scale = (uint32_t)lrintf(out->fy);
+    out->scale_x = (uint32_t)lrintf(out->fx);
+    out->flags = (r->ax > 1 || r->ay > 1) ? 1u : 0u;
     return 1;
 }
 
@@ -3637,7 +3885,7 @@ static const Nv2aBackend s_backend = { be_clear, be_draw, be_flip, be_sync,
 void nightfire_gpu_backend_register(void)
 {
     nv2a_backend_register(&s_backend);
-    if (rt_scale() > 1)
+    if (rt_scaled())
         xbox_FramebufferWindowSetGpu(be_window_frame);
     fprintf(stderr, "[GPUBE] D3D11 back end registered\n");
 }

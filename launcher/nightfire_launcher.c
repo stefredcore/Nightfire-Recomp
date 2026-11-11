@@ -645,6 +645,100 @@ static void sens_show(HWND h)
     SetDlgItemTextW(h, ID_S_SENSV, t);
 }
 
+/* The resolution list: the usual monitor sizes in the picture's shape --
+ * 16:9 with widescreen (an enhancement: the Xbox game itself is 4:3 only),
+ * else 4:3 -- and those Windows offers for the monitor in that shape, up to
+ * 3840x2160 and 1920x1440. Saved as Resolution = <w>x<h>, the size the game
+ * draws its picture at (src/main.c, RECOMP_GPUBE_SIZE). A file with an older
+ * step n (1-8, n times 640x480) shows the size nearest to its height. */
+typedef struct { int w, h; } Res;
+static const Res s_res_wide[] = { {1280, 720}, {1366, 768}, {1600, 900}, {1920, 1080},
+                                  {2560, 1440}, {3200, 1800}, {3840, 2160} };
+static const Res s_res_43[] = { {640, 480}, {800, 600}, {1024, 768}, {1152, 864}, {1280, 960},
+                                {1400, 1050}, {1600, 1200}, {1920, 1440} };
+static const Res s_res_uw[] = { {2560, 1080}, {3440, 1440}, {3840, 1600} };
+#define RES_MAX 48
+static Res s_res[RES_MAX];
+static int s_nres;
+
+/* shape 0 4:3 (exactly), 1 16:9 (within 1 %: 1366x768 is 16:9 to the pixel
+ * row), 2 ultrawide (2.3 to 2.45: 2560x1080, 3440x1440, 3840x1600 ...) */
+static int res_shape(int w, int h, int shape)
+{
+    if (shape == 2)
+        return w * 100 >= h * 230 && w * 100 <= h * 245;
+    return shape ? (w * 900 >= h * 1584 && w * 900 <= h * 1616) : w * 3 == h * 4;
+}
+
+static void res_add(int w, int h)
+{
+    int i, k;
+    for (i = 0; i < s_nres; i++)
+        if (s_res[i].w == w && s_res[i].h == h)
+            return;
+    if (s_nres == RES_MAX)
+        return;
+    for (i = 0; i < s_nres && (s_res[i].h < h || (s_res[i].h == h && s_res[i].w < w)); i++) {}
+    for (k = s_nres; k > i; k--)
+        s_res[k] = s_res[k - 1];
+    s_res[i].w = w;
+    s_res[i].h = h;
+    s_nres++;
+}
+
+/* Fills the list for the shape and chooses the entry with height h (the
+ * nearest there is). */
+static void res_fill(HWND c, int shape, int h)
+{
+    DEVMODEW dm;
+    DWORD i;
+    int k, best = 0, mw = 0, mh = 0;
+    wchar_t t[64];
+
+    s_nres = 0;
+    if (shape == 2)
+        for (k = 0; k < (int)(sizeof s_res_uw / sizeof s_res_uw[0]); k++)
+            res_add(s_res_uw[k].w, s_res_uw[k].h);
+    else if (shape)
+        for (k = 0; k < (int)(sizeof s_res_wide / sizeof s_res_wide[0]); k++)
+            res_add(s_res_wide[k].w, s_res_wide[k].h);
+    else
+        for (k = 0; k < (int)(sizeof s_res_43 / sizeof s_res_43[0]); k++)
+            res_add(s_res_43[k].w, s_res_43[k].h);
+    memset(&dm, 0, sizeof dm);
+    dm.dmSize = sizeof dm;
+    for (i = 0; EnumDisplaySettingsW(NULL, i, &dm); i++)
+        if (res_shape((int)dm.dmPelsWidth, (int)dm.dmPelsHeight, shape) && dm.dmPelsHeight >= 480
+                && dm.dmPelsWidth <= (DWORD)(shape == 2 ? 5120 : shape ? 3840 : 1920))
+            res_add((int)dm.dmPelsWidth, (int)dm.dmPelsHeight);
+    if (EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS, &dm)) {
+        mw = (int)dm.dmPelsWidth;
+        mh = (int)dm.dmPelsHeight;
+    }
+    SendMessageW(c, CB_RESETCONTENT, 0, 0);
+    for (k = 0; k < s_nres; k++) {
+        swprintf(t, 64, L"%d x %d%s", s_res[k].w, s_res[k].h,
+                 s_res[k].w == 640 && s_res[k].h == 480 ? L" (as the console)"
+                 : s_res[k].w == mw && s_res[k].h == mh ? L" (this monitor)" : L"");
+        SendMessageW(c, CB_ADDSTRING, 0, (LPARAM)t);
+        if (abs(s_res[k].h - h) < abs(s_res[best].h - h))
+            best = k;
+    }
+    SendMessageW(c, CB_SETCURSEL, best, 0);
+}
+
+/* The height the saved Resolution draws: <w>x<h>, or a step n of 480 * n. */
+static int res_saved_height(void)
+{
+    wchar_t t[32];
+    int w = 0, h = 0;
+    ini_get(ini_index(L"Resolution"), t, 32);
+    if (swscanf(t, L"%d x %d", &w, &h) == 2 && h >= 240)
+        return h;
+    w = _wtoi(t);
+    return 480 * (w >= 1 && w <= 8 ? w : 1);
+}
+
 static LRESULT CALLBACK dlg_proc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     switch (m) {
@@ -653,14 +747,19 @@ static LRESULT CALLBACK dlg_proc(HWND h, UINT m, WPARAM w, LPARAM l)
         int i, y = 16, cur;
         wchar_t t[64];
 
+        /* Widescreen = 0 4:3, 1 16:9, 2 ultrawide (21:9) -- enhancements: the
+         * Xbox game is 4:3 only */
+        add(h, L"STATIC", L"Picture", 0, 16, y + 3, 110, 20, 0);
+        c = add(h, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, 130, y, 214, 200, ID_S_WIDE);
+        SendMessageW(c, CB_ADDSTRING, 0, (LPARAM)L"4:3 (as the console)");
+        SendMessageW(c, CB_ADDSTRING, 0, (LPARAM)L"16:9 widescreen");
+        SendMessageW(c, CB_ADDSTRING, 0, (LPARAM)L"21:9 ultrawide");
+        cur = ini_int(L"Widescreen", 0);
+        SendMessageW(c, CB_SETCURSEL, cur < 0 || cur > 2 ? 0 : cur, 0);
+        y += 32;
         add(h, L"STATIC", L"Resolution", 0, 16, y + 3, 110, 20, 0);
         c = add(h, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, 130, y, 214, 240, ID_S_RES);
-        for (i = 1; i <= 8; i++) {
-            swprintf(t, 64, L"%d: %d x %d%s", i, 640 * i, 480 * i, i == 1 ? L" (as the console)" : L"");
-            SendMessageW(c, CB_ADDSTRING, 0, (LPARAM)t);
-        }
-        cur = ini_int(L"Resolution", 1);
-        SendMessageW(c, CB_SETCURSEL, cur < 1 || cur > 8 ? 0 : cur - 1, 0);
+        res_fill(c, cur < 0 || cur > 2 ? 0 : cur, res_saved_height());
         y += 32;
         add(h, L"STATIC", L"Anisotropy", 0, 16, y + 3, 110, 20, 0);
         c = add(h, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, 130, y, 214, 200, ID_S_ANISO);
@@ -675,9 +774,6 @@ static LRESULT CALLBACK dlg_proc(HWND h, UINT m, WPARAM w, LPARAM l)
             if (s_aniso[i] == cur)
                 SendMessageW(c, CB_SETCURSEL, i, 0);
         y += 36;
-        c = add(h, L"BUTTON", L"Widescreen (16:9)", BS_AUTOCHECKBOX | WS_TABSTOP, 16, y, 328, 22, ID_S_WIDE);
-        SendMessageW(c, BM_SETCHECK, ini_int(L"Widescreen", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
-        y += 26;
         c = add(h, L"BUTTON", L"Flicker filter (softer Image)", BS_AUTOCHECKBOX | WS_TABSTOP, 16, y, 328, 22, ID_S_FLICKER);
         SendMessageW(c, BM_SETCHECK, ini_int(L"FlickerFilter", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
         y += 26;
@@ -706,9 +802,16 @@ static LRESULT CALLBACK dlg_proc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_COMMAND:
         switch (LOWORD(w)) {
         case IDOK:
-            ini_set(L"Resolution", (int)SendDlgItemMessageW(h, ID_S_RES, CB_GETCURSEL, 0, 0) + 1);
+            {
+                int k = (int)SendDlgItemMessageW(h, ID_S_RES, CB_GETCURSEL, 0, 0);
+                wchar_t t[32];
+                if (k >= 0 && k < s_nres) {
+                    swprintf(t, 32, L"%dx%d", s_res[k].w, s_res[k].h);
+                    ini_put(ini_index(L"Resolution"), t);
+                }
+            }
             ini_set(L"Anisotropy", s_aniso[SendDlgItemMessageW(h, ID_S_ANISO, CB_GETCURSEL, 0, 0)]);
-            ini_set(L"Widescreen", SendDlgItemMessageW(h, ID_S_WIDE, BM_GETCHECK, 0, 0) == BST_CHECKED);
+            ini_set(L"Widescreen", (int)SendDlgItemMessageW(h, ID_S_WIDE, CB_GETCURSEL, 0, 0));
             ini_set(L"FlickerFilter", SendDlgItemMessageW(h, ID_S_FLICKER, BM_GETCHECK, 0, 0) == BST_CHECKED);
             ini_set(L"VSync", SendDlgItemMessageW(h, ID_S_VSYNC, BM_GETCHECK, 0, 0) == BST_CHECKED);
             {
@@ -729,6 +832,15 @@ static LRESULT CALLBACK dlg_proc(HWND h, UINT m, WPARAM w, LPARAM l)
         case ID_S_KEYS:
             open_keys();
             return 0;
+        case ID_S_WIDE:
+            if (HIWORD(w) == CBN_SELCHANGE) {
+                /* the other shape's list, at the height chosen in this one */
+                int k = (int)SendDlgItemMessageW(h, ID_S_RES, CB_GETCURSEL, 0, 0);
+                res_fill(GetDlgItem(h, ID_S_RES),
+                         (int)SendDlgItemMessageW(h, ID_S_WIDE, CB_GETCURSEL, 0, 0),
+                         k >= 0 && k < s_nres ? s_res[k].h : 480);
+            }
+            return 0;
         }
         break;
     case WM_HSCROLL:
@@ -748,7 +860,7 @@ static void open_settings(void)
     DWORD st = WS_POPUP | WS_CAPTION | WS_SYSMENU;
 
     wr.right = px(360);
-    wr.bottom = px(238);
+    wr.bottom = px(244);
     AdjustWindowRect(&wr, st, FALSE);
     GetWindowRect(s_win, &r);
     s_dlg = CreateWindowExW(WS_EX_DLGMODALFRAME, L"NfSettings", L"Settings", st,
