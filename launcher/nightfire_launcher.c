@@ -38,7 +38,7 @@
 #define WM_KEYS_WAIT (WM_APP + 4)
 
 enum { ID_VANILLA = 100, ID_ENHANCED, ID_PLAY, ID_SETTINGS, ID_UPDATE, ID_TIMER,
-       ID_S_RES, ID_S_ANISO, ID_S_WIDE, ID_S_FLICKER, ID_S_VSYNC, ID_S_KEYS, ID_S_SENS, ID_S_SENSV,
+       ID_S_RES, ID_S_ANISO, ID_S_WIDE, ID_S_FLICKER, ID_S_VSYNC, ID_S_FULL, ID_S_DRVAA, ID_S_HZ60, ID_S_KEYS, ID_S_SENS, ID_S_SENSV,
        ID_K_FOOT, ID_K_DRIVE, ID_K_LIST, ID_K_BIND, ID_K_CLEAR, ID_K_DEFAULT };
 enum { JOB_VERSION, JOB_CHECK, JOB_UPDATE };
 
@@ -324,6 +324,9 @@ static const struct { const wchar_t *sec, *key, *old_sec, *old_key; } s_keys[] =
     { L"Graphics", L"Anisotropy", L"Grafik", L"Anisotropie" },
     { L"Graphics", L"FlickerFilter", L"Grafik", L"Flimmerfilter" },
     { L"Graphics", L"VSync", L"Grafik", L"VSync" },
+    { L"Graphics", L"Fullscreen", L"Graphics", L"Fullscreen" },
+    { L"Graphics", L"DrivingAA", L"Graphics", L"DrivingAA" },
+    { L"Graphics", L"RefreshRate", L"Graphics", L"RefreshRate" },
     { L"Launcher", L"Mode", L"Launcher", L"Modus" },
 };
 #define NKEYS (sizeof s_keys / sizeof s_keys[0])
@@ -779,6 +782,15 @@ static LRESULT CALLBACK dlg_proc(HWND h, UINT m, WPARAM w, LPARAM l)
         y += 26;
         c = add(h, L"BUTTON", L"VSync", BS_AUTOCHECKBOX | WS_TABSTOP, 16, y, 328, 22, ID_S_VSYNC);
         SendMessageW(c, BM_SETCHECK, ini_int(L"VSync", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
+        y += 26;
+        c = add(h, L"BUTTON", L"Fullscreen (F11 switches ingame)", BS_AUTOCHECKBOX | WS_TABSTOP, 16, y, 328, 22, ID_S_FULL);
+        SendMessageW(c, BM_SETCHECK, ini_int(L"Fullscreen", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+        y += 26;
+        c = add(h, L"BUTTON", L"Original Console AA for Driving Missions", BS_AUTOCHECKBOX | WS_TABSTOP, 16, y, 328, 22, ID_S_DRVAA);
+        SendMessageW(c, BM_SETCHECK, ini_int(L"DrivingAA", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+        y += 26;
+        c = add(h, L"BUTTON", L"60 Hz (European disc, as the US version)", BS_AUTOCHECKBOX | WS_TABSTOP, 16, y, 328, 22, ID_S_HZ60);
+        SendMessageW(c, BM_SETCHECK, ini_int(L"RefreshRate", 50) == 60 ? BST_CHECKED : BST_UNCHECKED, 0);
         y += 32;
         {
             char s[32];
@@ -814,6 +826,9 @@ static LRESULT CALLBACK dlg_proc(HWND h, UINT m, WPARAM w, LPARAM l)
             ini_set(L"Widescreen", (int)SendDlgItemMessageW(h, ID_S_WIDE, CB_GETCURSEL, 0, 0));
             ini_set(L"FlickerFilter", SendDlgItemMessageW(h, ID_S_FLICKER, BM_GETCHECK, 0, 0) == BST_CHECKED);
             ini_set(L"VSync", SendDlgItemMessageW(h, ID_S_VSYNC, BM_GETCHECK, 0, 0) == BST_CHECKED);
+            ini_set(L"Fullscreen", SendDlgItemMessageW(h, ID_S_FULL, BM_GETCHECK, 0, 0) == BST_CHECKED);
+            ini_set(L"DrivingAA", SendDlgItemMessageW(h, ID_S_DRVAA, BM_GETCHECK, 0, 0) == BST_CHECKED);
+            ini_set(L"RefreshRate", SendDlgItemMessageW(h, ID_S_HZ60, BM_GETCHECK, 0, 0) == BST_CHECKED ? 60 : 50);
             {
                 int v = (int)SendDlgItemMessageW(h, ID_S_SENS, TBM_GETPOS, 0, 0);
                 char s[16];
@@ -860,7 +875,7 @@ static void open_settings(void)
     DWORD st = WS_POPUP | WS_CAPTION | WS_SYSMENU;
 
     wr.right = px(360);
-    wr.bottom = px(244);
+    wr.bottom = px(322);
     AdjustWindowRect(&wr, st, FALSE);
     GetWindowRect(s_win, &r);
     s_dlg = CreateWindowExW(WS_EX_DLGMODALFRAME, L"NfSettings", L"Settings", st,

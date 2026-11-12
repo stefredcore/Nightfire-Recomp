@@ -763,6 +763,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
      * have [Grafik] Aufloesung, Breitbild, Anisotropie and Flimmerfilter,
      * read where the English key is missing. The original mode draws at the
      * console's size for a 4:3 TV. */
+    /* Both modes: a window setting, not the game's -- nightfire.ini
+     * Fullscreen = 1 starts in borderless fullscreen (RECOMP_FULLSCREEN, as
+     * F11 and Alt+Enter switch it in either mode). */
+    if (!getenv("RECOMP_FULLSCREEN")) {
+        const char *ini = getenv("NF_INI");
+        char path[MAX_PATH];
+        if (_fullpath(path, ini && *ini ? ini : "nightfire.ini", sizeof path)
+                && GetPrivateProfileIntA("Graphics", "Fullscreen", 0, path))
+            _putenv("RECOMP_FULLSCREEN=1");
+    }
     if (nf_enhanced()) {
         const char *ini = getenv("NF_INI");
         char path[MAX_PATH], v[32];
@@ -815,6 +825,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             int fl = have ? (int)nf_ini_int(path, "FlickerFilter", "Flimmerfilter", 0) : 0;
             _putenv(fl ? "RECOMP_FLICKER_FILTER=1" : "RECOMP_FLICKER_FILTER=0");
         }
+        /* RefreshRate = 60 on a European disc: the game at 60 Hz, as the
+         * North-American one runs (NF_PAL60: manual_main.c sub_000E6E80,
+         * manual_driving.c sub_00117D80, and the movies' folder below); 50,
+         * the default, as a European console. */
+        if (have && nf_disc_is_pal() && !getenv("NF_PAL60")
+                && nf_ini_int(path, "RefreshRate", "RefreshRate", 50) == 60) {
+            _putenv("NF_PAL60=1");
+            if (!getenv("RECOMP_VBLANK_HZ"))
+                _putenv("RECOMP_VBLANK_HZ=60");
+        }
         if (!getenv("RECOMP_PRESENT_VSYNC") && have
                 && !nf_ini_int(path, "VSync", "VSync", 1))
             _putenv("RECOMP_PRESENT_VSYNC=0");
@@ -846,6 +866,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         _putenv("RECOMP_GPUBE_SCALE=");
         _putenv("RECOMP_GPUBE_SIZE=");
         _putenv("RECOMP_GPUBE_NO_AA=");
+        _putenv("NF_PAL60=");
         _putenv("RECOMP_GPUBE_ANISO=");
         _putenv("RECOMP_VIDEO_FLAGS=");
         _putenv("RECOMP_DISPLAY_ASPECT=");
@@ -1030,6 +1051,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
     CloseHandle(CreateThread(NULL, 0, d3d_semaphore_thread, NULL, 0, NULL));
 
+#ifndef NIGHTFIRE_DRIVING
+    /* 60 Hz on a European disc (NF_PAL60): the game takes its movies from
+     * eurocom\30_fps then (sub_000E8A90 picks the name at 0x1620FC); the
+     * European disc has them, the same names, in 25_fps. */
+    if (nf_enhanced() && getenv("NF_PAL60")) {
+        memcpy((uint8_t *)g_xbox_mem_offset + 0x1620FC, "25_fps", 6);
+        fprintf(stderr, "[BOOT] 60 Hz: the movies from eurocom\\25_fps\n");
+    }
+#endif
 #ifdef NIGHTFIRE_DRIVING
     /* Driving plays its own mission intro/outro movies (NTSC\eng\*.mad,
      * gated by the byte at 0x1B7057, which is 1 in the image and never

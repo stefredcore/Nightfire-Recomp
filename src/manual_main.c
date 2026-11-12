@@ -861,6 +861,24 @@ void sub_00025190(void)
     MEMF(cam + 0xEC) = MEMF(cam + 0xEC) / k;
 }
 
+/* 60 Hz on a European disc (enhanced, nightfire.ini RefreshRate = 60:
+ * NF_PAL60 from main.c). The video setup sets 0x2C5760 when the console's
+ * video standard is NTSC, and two things follow from it: the game's rate,
+ * 60 instead of 50 (sub_000DD1D0), and its movies' folder, eurocom\30_fps
+ * instead of 25_fps (sub_000E8A90; main.c points that name at the European
+ * disc's 25_fps, which holds the same movies). The North-American game runs
+ * this way at 60 Hz; the European text and languages stay, as the standard
+ * itself (0x2C5761) stays PAL. */
+extern void sub_000E6E80_gen(void);
+
+void sub_000E6E80(void)
+{
+    sub_000E6E80_gen();
+    if (!nf_enhanced() || !getenv("NF_PAL60"))
+        return;
+    MEM8(0x2C5760) = 1;
+}
+
 /* A menu over the world (a window counting 3, the pause menu): its frame, for
  * the back end to squeeze the whole of it about the centre, and for the mouse
  * to undo that. */
@@ -1112,6 +1130,24 @@ void sub_000DE720(void)
      * either does its own job everywhere. */
     if (mkb_action("pause") && mkb_action("menu_back"))
         skip = menu_frontend_open() ? "pause" : "menu_back";
+    /* A movie playing with no menu over it (the game's XMV decoder at
+     * 0x2FF75C, sub_000E8CF0; sub_000E8A00 clears it when it stops; the
+     * title picture, one element, stays open behind the intro). On the PC a
+     * movie is skipped with the left button or Enter: those give the
+     * commands of Space (+jump 0x07, +menu_y 0x20) and of Enter (accept
+     * 0x1F, 0x19), and no other key does anything while it plays. The
+     * controller is untouched. */
+    for (k = 0; k < 5 && !(menu_takes_input(k) && menu_choosable(k) > 1); k++)
+        ;
+    if (MEM32(0x2FF75C) && k == 5) {
+        if (mkb_pointer_click() || mkb_action("menu_accept")) {
+            MEMF(0x1FE6E4 + 0x07 * 4) = 1.0f;
+            MEMF(0x1FE6E4 + 0x20 * 4) = 1.0f;
+            MEMF(0x1FE6E4 + 0x1F * 4) = 1.0f;   /* Enter's own: accept */
+            MEMF(0x1FE6E4 + 0x19 * 4) = 1.0f;
+        }
+        return;
+    }
     for (i = 0; i < sizeof k_mkb_cmds / sizeof k_mkb_cmds[0]; i++)
         if ((!skip || strcmp(k_mkb_cmds[i].action, skip)) && mkb_action(k_mkb_cmds[i].action))
             for (k = 0; k < 2 && k_mkb_cmds[i].cmd[k] != 0xFF; k++)

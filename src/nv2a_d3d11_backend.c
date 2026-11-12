@@ -2706,6 +2706,18 @@ static size_t prog_hlsl(const Nv2aProgramBatch *pb, char *buf, size_t cap)
         const char *e = getenv("RECOMP_SUBPIXEL_SNAP");
         tx(&t, "#define SNAP %d\n", !(e && e[0] == '0'));
     }
+    { /* A vertex's depth as it is, for the clipper to cut the triangle at the
+         near plane and interpolate it as the CPU rasteriser does
+         (raster_xf_clipped: z * w, clipped, then divided); the rasteriser
+         clamps each pixel's depth to the viewport's 0..1 (depth clip is off).
+         Clamped per vertex before clipping, a triangle reaching behind the
+         eye -- the river below the van in the driving missions' Paris --
+         took 0 or 1 at that corner and wrong depths across, lost the depth
+         test and vanished and came back as the view moved.
+         RECOMP_GPUBE_Z_SATURATE=1 clamps per vertex, as before. */
+        const char *e = getenv("RECOMP_GPUBE_Z_SATURATE");
+        tx(&t, "#define ZSAT %d\n", e && e[0] == '1');
+    }
     tx(&t,
        "cbuffer C : register(b0) { float4 vp; float4 tx; float4 wd; };\n"
        "cbuffer P : register(b2) { float4 c[%u]; float4 pa; float4 pf; float4 cf; };\n"
@@ -2845,7 +2857,8 @@ static size_t prog_hlsl(const Nv2aProgramBatch *pb, char *buf, size_t cap)
        "  precise float w = pos.w, rhw = 1.0 / w;\n"
        "  precise float wc = w > 0.0 ? 1.0 / max(rhw, 1e-20) : w;\n"
        "  if (SNAP) pos.xy = trunc(pos.xy * 16.0) / 16.0;\n"
-       "  precise float sx = pos.x * vp.x - 1.0, sy = 1.0 + pos.y * vp.y, sz = saturate(pos.z * vp.z);\n"
+       "  precise float sx = pos.x * vp.x - 1.0, sy = 1.0 + pos.y * vp.y, sz = pos.z * vp.z;\n"
+       "  if (ZSAT) sz = saturate(sz);\n"
        "  precise float zd = pos.z * w - pa.z * w;\n"
        "  VO o;\n"
        "  o.p = float4(sx * wc, sy * wc, sz * wc, wc);\n"

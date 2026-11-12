@@ -117,6 +117,22 @@ static void race_menu_mouse(uint32_t pad);
 
 static void race_fov_apply(void);
 
+/* 60 Hz on a European disc (enhanced, NF_PAL60 from main.c): the driving
+ * image has the console's PAL-60 mode of its own -- video mode 3, beside 1
+ * NTSC and 2 PAL (0x2445AC, from its arguments "ntsc", "pal", "pal60";
+ * sub_00059920) -- and hands it to D3D here (0x243540). PAL stays PAL-60:
+ * the European movies and texts at 60 Hz. */
+extern void sub_00117D80_gen(void);
+
+void sub_00117D80(void)
+{
+    sub_00117D80_gen();
+    if (!nf_enhanced() || !getenv("NF_PAL60"))
+        return;
+    if (MEM32(0x243540) == 2)
+        MEM32(0x243540) = 3;
+}
+
 void sub_00051B40(void)
 {
     uint32_t dev = g_ecx, cur;
