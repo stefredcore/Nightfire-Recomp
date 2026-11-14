@@ -362,6 +362,7 @@ static uint32_t s_mouse_look_ctrl;   /* control block the mouse owns, 0 none */
  * the entity. The entity itself is not kept: it is freed when a level section
  * ends, and the input hook runs after that with nothing left to read. */
 static int s_player_scoped;
+static int s_player_missile;         /* player 1 steers a guided missile */
 
 /* Weightless (Equinox): modes 8 and 9 (sub_000AA6F0) have no pitch -- it
  * zeroes [ctrl+0x838] -- and turn the whole body instead, by the yaw step
@@ -397,6 +398,30 @@ static void space_look(void)
     s_space_yaw = s_space_pitch = 0.0;
 }
 
+/* The guided missile turns each frame by look command 0 across and 5 up and
+ * down (raw, as sub_0006CA20 hands them back), times [0x17C100] (1.0) and
+ * [0x15D46C] (pi/128 radians) -- a full stick about 1.4 degrees a frame.
+ * The mouse turns it by its own angle instead, as it turns the view, through
+ * the same commands, unclamped: a quick flick turns it further than the
+ * stick could. The player's look step ignores mode 10, so the counts would
+ * be lost otherwise. */
+static void missile_look(void)
+{
+    double yaw, pitch, k = (double)MEMF(0x17C100) * MEMF(0x15D46C);
+
+    if (!s_player_missile)
+        return;
+    s_player_missile = 0;           /* the look step sets it again */
+    if (!mkb_mouse_look(&yaw, &pitch) || k <= 0.0)
+        return;
+    yaw *= 3.14159265358979 / 180.0;
+    pitch *= 3.14159265358979 / 180.0;
+    if (yaw != 0.0)
+        space_command(0, (float)(yaw / k));
+    if (pitch != 0.0)
+        space_command(5, (float)(pitch / k));
+}
+
 /* Whether the right mouse button aims (0x13) rather than fires the other way
  * (0x0C) for the item in hand: a weapon with a scope (flags 0x40 at +0x68 of
  * its type's entry, 0x18CFA0 + type * 0x10C), or a gadget (types from 0x36
@@ -430,13 +455,17 @@ void sub_000B7610(void)
     if (!entity || !(ctrl = MEM32(entity + 0xBC)) || (int8_t)MEM8(ctrl + 0x8DE) != 0)
         return;
     s_player_scoped = weapon_scoped(entity);
+    mode = (int16_t)MEM16(entity + 0xD2);
+    /* Flying a guided missile (the end of Exchange): mode 10 with
+     * [entity+0xDB] 3, what the missile's flight (sub_00023670) asks of its
+     * owner before it steers by the look commands. missile_look feeds it. */
+    s_player_missile = mode == 10 && MEM8(entity + 0xDB) == 3;
     /* Aiming (the item's [+0x50] bit 0, set by the title's manual aim, the
      * scope and the lighter's camera too): the wheel zooms by itself. */
     if (MEM32(entity + 0xB8) && (MEM8(MEM32(entity + 0xB8) + 0x50) & 1))
         mkb_title_aiming();
     if (fabsf(MEMF(0x2FF4C0)) > 0.05f || fabsf(MEMF(0x2FF4C4)) > 0.05f)
         s_mouse_look_ctrl = 0;
-    mode = (int16_t)MEM16(entity + 0xD2);
     if (mode >= 10 && (mode <= 12 || mode == 16))
         return;
     if (!mkb_mouse_look(&yaw, &pitch)) {
@@ -1200,6 +1229,7 @@ void sub_0006CF50(void)
     if (forward)
         mkb_command(2, f);
     space_look();
+    missile_look();
 }
 
 /* Return an override for the given Xbox VA, or NULL to fall through to the
