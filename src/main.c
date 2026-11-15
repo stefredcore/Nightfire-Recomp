@@ -530,6 +530,77 @@ int nf_enhanced(void)
     return s_nf_enhanced;
 }
 
+/* PC prompts, for both images (manual_main.c, manual_driving.c): the keys
+ * mkb.ini binds, named as a button prompt shows them in place of a
+ * controller's button. mkb_bound_key gives the n-th key of a pad control
+ * ("a", "dpad_up") or an action ("+menu_accept") by its canonical name. */
+const char *mkb_bound_key(const char *name, int n);   /* xboxrecomp mkb_input.h */
+
+int nf_key_bound(const char *name, const char *key)
+{
+    const char *k;
+    int n;
+
+    for (n = 0; (k = mkb_bound_key(name, n)) != NULL; n++)
+        if (!strcmp(k, key))
+            return 1;
+    return 0;
+}
+
+/* The key to show for a control or action: the first, or in a menu (menu
+ * 1) the first that is no mouse button -- the menus' pointer clicks where
+ * it is, not the chosen entry. Arrow keys first when one is bound
+ * (arrow "up" ...), for the menus' directions. NULL: none. */
+const char *nf_prompt_key(const char *name, int menu, const char *arrow)
+{
+    const char *k, *first = NULL;
+    int n;
+
+    if (arrow && nf_key_bound(name, arrow))
+        return arrow;
+    for (n = 0; (k = mkb_bound_key(name, n)) != NULL; n++)
+        if (!menu || strncmp(k, "mouse", 5)) {
+            first = k;
+            break;
+        }
+    return first;
+}
+
+/* "(KEY)" or, with a second key, "(KEY1/KEY2)", into out (cap at least
+ * 40); its length, 0 for no key. */
+size_t nf_key_label(const char *k1, const char *k2, char *out, size_t cap)
+{
+    static const struct { const char *key, *label; } names[] = {
+        { "escape", "ESC" }, { "mouse1", "LMB" }, { "mouse2", "RMB" },
+        { "mouse3", "MMB" }, { "lshift", "SHIFT" }, { "rshift", "SHIFT" },
+        { "lctrl", "CTRL" }, { "rctrl", "CTRL" }, { "wheelup", "WHEEL" },
+        { "wheeldown", "WHEEL" },
+    };
+    const char *k[2];
+    size_t i, j, n = 0;
+
+    if (!k1 || cap < 40)
+        return 0;
+    k[0] = k1;
+    k[1] = k2;
+    out[n++] = '(';
+    for (j = 0; j < 2 && k[j]; j++) {
+        const char *s = k[j];
+        if (j)
+            out[n++] = '/';
+        for (i = 0; i < sizeof names / sizeof names[0]; i++)
+            if (!strcmp(s, names[i].key)) {
+                s = names[i].label;
+                break;
+            }
+        for (; *s && n < 17 * (j + 1); s++)
+            out[n++] = (char)((*s >= 'a' && *s <= 'z') ? *s - 32 : *s);
+    }
+    out[n++] = ')';
+    out[n] = 0;
+    return n;
+}
+
 /* A [Graphics] setting of nightfire.ini, or the [Grafik] one the file had
  * before it was in English. */
 static int nf_ini_int(const char *path, const char *key, const char *old, int def)

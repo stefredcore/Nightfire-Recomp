@@ -369,6 +369,196 @@ void sub_000E0140(void)
     s_race_menu = self;
 }
 
+/* PC prompts, as in the main game (manual_main.c): while the keyboard and
+ * mouse were used last, a button picture in a prompt gives way to the key
+ * mkb.ini's [nightfire_driving] binds to that button, "(ENTER) Select", and
+ * comes back once a controller is used. Driving.xbe draws a prompt as a
+ * picture -- an object 0x50 long, its sprite from +0x30, its width and
+ * height at +0x40 and +0x44 -- beside a text, not as a code inside it. */
+int mkb_in_use(void);                                       /* xboxrecomp mkb_input.h */
+uint32_t xbox_ContiguousAlloc(uint32_t size, uint32_t alignment);
+const char *nf_prompt_key(const char *name, int menu, const char *arrow);   /* main.c */
+size_t nf_key_label(const char *k1, const char *k2, char *out, size_t cap);
+
+#define PICTURE_SIZE 0x50
+#define LABEL_SIZE   0x40
+
+/* Guest memory for the prompts: n pictures, each with a label after it. */
+static uint32_t prompt_slot(int i)
+{
+    static uint32_t mem;
+    static int failed;
+
+    if (!mem && !failed && !(mem = xbox_ContiguousAlloc(8 * (PICTURE_SIZE + LABEL_SIZE), 16)))
+        failed = 1;
+    return mem ? mem + (uint32_t)i * (PICTURE_SIZE + LABEL_SIZE) : 0;
+}
+
+/* A copy of a picture that draws nothing, `width` wide. */
+static uint32_t prompt_blank(uint32_t slot, uint32_t picture, float width)
+{
+    uint32_t i;
+
+    for (i = 0; i < PICTURE_SIZE; i += 4)
+        MEM32(slot + i) = MEM32(picture + i);
+    MEMF(slot + 0x40) = width;
+    MEMF(slot + 0x44) = 0.0f;
+    return slot;
+}
+
+static int prompts_keys(void)
+{
+    return nf_enhanced() && mkb_in_use();
+}
+
+/* The pause menu's legend: the function at 0xDEB20.. lists a picture
+ * ([esp+0x58], one a slot, esi the slot) and a label ([esp+0x74]) for each
+ * button the page has, the label from the string lookup sub_000E3AF0 (its
+ * argument the string), called from the places below with the picture
+ * already in its slot and the menu in ebp. The menu's pictures: +0x1F8 A,
+ * +0x1F0 B, +0x1EC START, +0x1F4 X, +0x1E8 the D-pad up and down, +0x1FC
+ * left and right. The label gets its key, the picture a blank: a slot is
+ * the picture's width, 5, the label and 20 to the next, so the blank's
+ * -18 keeps the labels, now longer, about as far apart. The D-pad's
+ * pictures stay, as the arrow keys' shape: "(LEFT/RIGHT) Next (UP/DOWN)
+ * Scroll" spelled out ran past the panel's sides. */
+extern void sub_000E3AF0_gen(void);
+
+void sub_000E3AF0(void)
+{
+    static const uint32_t legend[] = {
+        0xDEBE6, 0xDEC16, 0xDEC42, 0xDEC6E, 0xDEC9A, 0xDECC6, 0xDECF2,
+    };
+    uint32_t sp = g_esp, ret = MEM32(sp), menu = g_ebp, slot_at, picture, text, out;
+    const char *k1 = NULL;
+    char label[48];
+    size_t i, n;
+    int slot;
+
+    if (!nf_enhanced()) {
+        sub_000E3AF0_gen();
+        return;
+    }
+    sub_000E3AF0_gen();
+    for (i = 0; i < sizeof legend / sizeof legend[0] && legend[i] != ret; i++)
+        ;
+    if (i == sizeof legend / sizeof legend[0] || !prompts_keys() || !menu || !(text = g_eax))
+        return;
+    slot = (int)g_esi;
+    if (slot < 0 || slot >= 7)
+        return;
+    slot_at = sp + 8 + 0x58 + (uint32_t)slot * 4;
+    picture = MEM32(slot_at);
+    if (!picture)
+        return;
+    if (picture == MEM32(menu + 0x1F8))
+        k1 = nf_prompt_key("a", 1, NULL);
+    else if (picture == MEM32(menu + 0x1F0))
+        k1 = nf_prompt_key("b", 1, NULL);
+    else if (picture == MEM32(menu + 0x1EC))
+        k1 = nf_prompt_key("start", 1, NULL);
+    else if (picture == MEM32(menu + 0x1F4))
+        k1 = nf_prompt_key("x", 1, NULL);
+    if (!k1)
+        return;
+    if (!(out = prompt_slot(slot)) || (n = nf_key_label(k1, NULL, label, sizeof label)) == 0)
+        return;
+    label[n++] = ' ';
+    for (i = 0; i < n; i++)
+        MEM8(out + PICTURE_SIZE + i) = (uint8_t)label[i];
+    for (; i < LABEL_SIZE - 1 && MEM8(text + i - n); i++)
+        MEM8(out + PICTURE_SIZE + i) = MEM8(text + i - n);
+    MEM8(out + PICTURE_SIZE + i) = 0;
+    MEM32(slot_at) = prompt_blank(out, picture, -18.0f);
+    g_eax = out + PICTURE_SIZE;
+}
+
+/* The tutorial lines while driving: sub_000DA1D0 (stdcall: the line, a
+ * buffer for the text before the button, one for the text after; 0x40 each)
+ * splits a line at its first "*A*", "*G*", "*P*" or "*D*" (the table at
+ * 0x1A0048) and returns which, or -1; the caller then takes that button's
+ * picture from the HUD object (ecx) and draws the two halves around it. The
+ * buttons: gas (the right trigger), a gadget (X), fire and the gun's fire
+ * (A). The key goes into the text, the whole line into the first half, and
+ * the picture the caller reads next is a blank -- put in its place in the
+ * object for that read and back at the draw that follows (sub_000D9AD0 or
+ * sub_000D98D0, the callers' next calls), or at the next split. */
+extern void sub_000DA1D0_gen(void);
+extern void sub_000D9AD0_gen(void);
+extern void sub_000D98D0_gen(void);
+
+static uint32_t s_line_field, s_line_picture;   /* the picture to put back */
+
+static void line_picture_back(void)
+{
+    if (s_line_field) {
+        MEM32(s_line_field) = s_line_picture;
+        s_line_field = 0;
+    }
+}
+
+void sub_000DA1D0(void)
+{
+    static const char *const controls[4] = { "right_trigger", "x", "a", "a" };
+    static const uint32_t near_pictures[4] = { 0xE0, 0x1F4, 0xD4, 0x1F8 };   /* called from 0xDDB97 */
+    static const uint32_t far_pictures[4] = { 0xE0, 0xDC, 0xD4, 0xD8 };      /* from 0xDF0B6 */
+    uint32_t sp = g_esp, ret = MEM32(sp), hud = g_ecx;
+    uint32_t line = MEM32(sp + 4), before = MEM32(sp + 8), after = MEM32(sp + 12);
+    uint32_t marker, at, field, slot;
+    char text[0x40 + 40], key[40];
+    size_t n = 0, k;
+    uint32_t idx, i;
+
+    if (!nf_enhanced()) {
+        sub_000DA1D0_gen();
+        return;
+    }
+    line_picture_back();
+    sub_000DA1D0_gen();
+    idx = g_eax;
+    if (idx > 3 || !prompts_keys() || !hud || (ret != 0xDDB9C && ret != 0xDF0BB))
+        return;
+    if ((k = nf_key_label(nf_prompt_key(controls[idx], 0, NULL), NULL, key, sizeof key)) == 0)
+        return;
+    marker = 0x1A0048 + idx * 4;                 /* "*A*" ... as 4 bytes */
+    for (at = line; MEM8(at); at++)
+        if (MEM8(at) == MEM8(marker) && MEM8(at + 1) == MEM8(marker + 1) &&
+                MEM8(at + 2) == MEM8(marker + 2))
+            break;
+    if (!MEM8(at) || !(slot = prompt_slot(7)))
+        return;
+    for (i = line; i < at && n < 0x3F; i++)
+        text[n++] = (char)MEM8(i);
+    for (i = 0; i < k && n < 0x3F; i++)
+        text[n++] = key[i];
+    for (i = at + 3; MEM8(i) && n < 0x3F; i++)
+        text[n++] = (char)MEM8(i);
+    for (i = 0; i < n; i++)
+        MEM8(before + i) = (uint8_t)text[i];
+    MEM8(before + n) = 0;
+    MEM8(after) = 0;
+    field = hud + (ret == 0xDDB9C ? near_pictures : far_pictures)[idx];
+    if (!MEM32(field))
+        return;
+    s_line_field = field;
+    s_line_picture = MEM32(field);
+    MEM32(field) = prompt_blank(slot, s_line_picture, 0.0f);
+}
+
+void sub_000D9AD0(void)
+{
+    if (nf_enhanced())
+        line_picture_back();
+    sub_000D9AD0_gen();
+}
+
+void sub_000D98D0(void)
+{
+    if (nf_enhanced())
+        line_picture_back();
+    sub_000D98D0_gen();
+}
+
 recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
 {
     (void)xbox_va;

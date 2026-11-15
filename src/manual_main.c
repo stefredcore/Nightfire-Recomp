@@ -1112,8 +1112,24 @@ static void menu_pointer(void)
             }
             continue;
         }
-        if (!menu_element_at(win, x, y))
-            continue;
+        {
+            /* A chooser of left and right (type 9: the control scheme when a
+             * codename is made, its arrows at its two ends, measured at x 73
+             * and 358 across 60 to 376): a click on an end is one press of
+             * left or right, not the accept a click elsewhere on it gives. */
+            uint32_t e = menu_element_at(win, x, y), menu = MEM32(win + 0x1BC);
+            if (e && menu && MEM8(e + 0x7B) == 9) {
+                int ex = (int16_t)MEM16(menu + 0x70) + (int16_t)MEM16(e + 0x70);
+                int ew = (int16_t)MEM16(e + 0x74);
+                if (ew > 96 && (x < ex + 32 || x > ex + ew - 32)) {
+                    if (press)
+                        MEMF(0x1FE6E4 + (x < ex + 32 ? 0x1C : 0x1D) * 4) = 1.0f;
+                    continue;
+                }
+            }
+            if (!e)
+                continue;
+        }
         hit = 1;
         /* Only when the mouse moved: the D-pad keeps the point it set. */
         if (x != s_menu_wx[i] || y != s_menu_wy[i]) {
@@ -1201,6 +1217,125 @@ void sub_000DE720(void)
         MEMF(0x1FE6E4 + (s_player_scoped ? 0x13 : 0x0C) * 4) = 1.0f;
     menu_overlay();
     menu_pointer();
+}
+
+/* PC prompts: while the keyboard and mouse are what the player used last,
+ * the menus' button legends name the keys mkb.ini binds, "(ENTER) Select",
+ * and go back to the buttons once a controller is used. The game writes a
+ * button into a text as '~' and a letter, which its text layout
+ * (sub_00069C50: the text fifth on the stack, the characters to lay out
+ * eighth, below 0 for all -- fewer while a text is typed in) draws from the
+ * table at 0x17BDC0: A B X Y the face buttons, S Start, V the d-pad up and
+ * down, H left and right, W all four, L R the triggers, E F the sticks,
+ * C D T White, Black and a stick's click. Only legends change: "Press ~A
+ * ...", several buttons two spaces apart, or a line led by a button and
+ * more of them; one leading button alone ("~B Back") in the front end only,
+ * since the controls page in the pause menu lists the controller's buttons
+ * one a line. Not in a mission's own hints: a menu must be open. */
+int mkb_in_use(void);                                /* xboxrecomp mkb_input.h */
+const char *mkb_bound_key(const char *name, int n);
+uint32_t xbox_ContiguousAlloc(uint32_t size, uint32_t alignment);
+int nf_key_bound(const char *name, const char *key);                  /* main.c */
+size_t nf_key_label(const char *k1, const char *k2, char *out, size_t cap);
+
+/* The key doing the action here: its first key the other action does not
+ * take (Esc is +pause and +menu_back: back in the front end, pause in a
+ * mission, as sub_000DE720 settles it). */
+static const char *prompt_key(const char *action, const char *other)
+{
+    const char *k;
+    int n;
+
+    for (n = 0; (k = mkb_bound_key(action, n)) != NULL; n++)
+        if (!other || !nf_key_bound(other, k))
+            return k;
+    return NULL;
+}
+
+/* A button's key as "(ENTER)"; 0 keeps the button. */
+static size_t prompt_text(char code, char *out, size_t cap)
+{
+    int front = menu_frontend_open();
+    const char *k1 = NULL;
+
+    switch (code) {
+    case 'A': k1 = prompt_key("+menu_accept", NULL); break;
+    case 'B': k1 = prompt_key("+menu_back", front ? NULL : "+pause"); break;
+    case 'X': k1 = prompt_key("+menu_x", NULL); break;
+    case 'Y': k1 = prompt_key("+menu_y", NULL); break;
+    case 'S': k1 = prompt_key("+pause", front ? "+menu_back" : NULL); break;
+    /* The D-pad's pictures (V, H, W) stay, as the arrow keys' shape and as
+     * in the driving image's legend. */
+    default: return 0;
+    }
+    return nf_key_label(k1, NULL, out, cap);
+}
+
+static int prompt_legend(const char *t, int codes)
+{
+    if (!strncmp(t, "Press ~", 7) || strstr(t, "  ~"))
+        return 1;
+    if (t[0] == '~' && t[1] && t[2] == ' ')
+        return codes > 1 || menu_frontend_open();
+    return 0;
+}
+
+extern void sub_00069C50_gen(void);
+
+void sub_00069C50(void)
+{
+    enum { MAX = 512 };
+    static uint32_t buf;              /* the rewritten text, guest memory */
+    static int failed;
+    uint32_t sp = g_esp, text = MEM32(sp + 0x14);
+    int32_t count = (int32_t)MEM32(sp + 0x20), newcount = -1;
+    char in[MAX], out[MAX + 64], key[40];
+    int len = 0, codes = 0, i;
+    size_t n = 0, k;
+
+    if (!nf_enhanced() || !text || !mkb_in_use() || !menus_open()) {
+        sub_00069C50_gen();
+        return;
+    }
+    for (; len < MAX - 1 && MEM8(text + len); len++) {
+        in[len] = (char)MEM8(text + len);
+        if (in[len] == '~')
+            codes++;
+    }
+    in[len] = 0;
+    if (!codes || MEM8(text + len) || !prompt_legend(in, codes)) {
+        sub_00069C50_gen();
+        return;
+    }
+    if (!buf && !failed && !(buf = xbox_ContiguousAlloc(sizeof out, 16)))
+        failed = 1;
+    if (!buf) {
+        sub_00069C50_gen();
+        return;
+    }
+    for (i = 0; i < len && n + 40 < sizeof out; i++) {
+        if (count >= 0 && i == count)
+            newcount = (int)n;
+        if (in[i] == '~' && i + 1 < len &&
+                (k = prompt_text(in[i + 1], key, sizeof key)) != 0) {
+            memcpy(out + n, key, k);
+            n += k;
+            i++;
+            continue;
+        }
+        out[n++] = in[i];
+    }
+    if (count >= 0 && newcount < 0)
+        newcount = (int)n;
+    for (k = 0; k < n; k++)
+        MEM8(buf + (uint32_t)k) = (uint8_t)out[k];
+    MEM8(buf + (uint32_t)n) = 0;
+    MEM32(sp + 0x14) = buf;
+    if (count >= 0)
+        MEM32(sp + 0x20) = (uint32_t)newcount;
+    sub_00069C50_gen();
+    MEM32(sp + 0x14) = text;
+    MEM32(sp + 0x20) = (uint32_t)count;
 }
 
 void sub_0006CF50(void)
