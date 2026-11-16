@@ -13,7 +13,6 @@ translated to C and built on your own PC from your own disc. This is not an emul
 - Optional 60 Hz for PAL versions
 - Up to 16x anisotropic filtering
 - Full mouse and keyboard support with direct mouse look in-game
-- On-screen prompts show your keyboard keys, and the controller buttons again when you use a controller
 - Mouse cursor in all menus
 - Launcher for settings, key bindings and easy updates
 - Easy-to-use installer that brings everything it needs
