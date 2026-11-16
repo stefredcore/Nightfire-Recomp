@@ -6,6 +6,20 @@ translated to C and built on your own PC from your own disc. This is not an emul
 
 **No game files are included.** You need your own copy of the game.
 
+<h2>Features</h2>
+
+- Up to 4K resolution
+- 16:9 widescreen and 21:9 ultrawide
+- Optional 60 Hz for PAL versions
+- Up to 16x anisotropic filtering
+- Full mouse and keyboard support with direct mouse look in-game
+- On-screen prompts show your keyboard keys, and the controller buttons again when you use a controller
+- Mouse cursor in all menus
+- Launcher for settings, key bindings and easy updates
+- Easy-to-use installer that brings everything it needs
+- Original mode to play the game as on the console
+- Optional console-accurate picture with the original anti-aliasing and softening
+
 <h2>What you need</h2>
 
 - Windows 10 or 11, 64-bit, and a DirectX 11 graphics card
@@ -29,6 +43,11 @@ The launcher has two modes:
 
 - **Original**: the game as on the console, with a controller only.
 - **Enhanced**: adds mouse and keyboard, higher resolution, widescreen and other options.
+
+In the game:
+
+- **F11** or **Alt+Enter** switches between fullscreen and window.
+- **F9** turns mouse and keyboard off and on, and frees the courser.
 
 Your savegames are in `Documents\My Games\Nightfire Recomp`. Delete that folder to start the
 game from the beginning.
